@@ -1,6 +1,6 @@
 // src/shared/database/database.module.ts
 import { Global, Module } from '@nestjs/common';
-import { createDrizzleDb, DRIZZLE } from './db.provider';
+import { createDrizzleDb, DRIZZLE } from './database.provider';
 import { DbConfig } from '@config/index';
 
 @Global()

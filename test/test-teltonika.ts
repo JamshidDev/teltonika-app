@@ -35,20 +35,21 @@ function buildPacket(): Buffer {
 
   buf.writeUInt32BE(0x00000000, offset);
   offset += 4; // preamble
-  buf.writeUInt32BE(0x00000030, offset);
-  offset += 4; // data length
+  const dataLenOffset = offset;
+  offset += 4; // data length (keyinroq)
+
+  const dataStart = offset;
+
   buf.writeUInt8(0x08, offset);
   offset += 1; // codec 8
   buf.writeUInt8(0x01, offset);
   offset += 1; // 1 record
 
-  // Timestamp
   buf.writeBigInt64BE(BigInt(Date.now()), offset);
   offset += 8;
   buf.writeUInt8(0x01, offset);
   offset += 1; // priority
 
-  // Toshkent GPS
   buf.writeInt32BE(Math.round(69.2401 * 1e7), offset);
   offset += 4;
   buf.writeInt32BE(Math.round(41.2995 * 1e7), offset);
@@ -62,7 +63,6 @@ function buildPacket(): Buffer {
   buf.writeUInt16BE(60, offset);
   offset += 2;
 
-  // I/O bo'sh
   buf.writeUInt8(0, offset);
   offset += 1;
   buf.writeUInt8(0, offset);
@@ -78,6 +78,9 @@ function buildPacket(): Buffer {
 
   buf.writeUInt8(0x01, offset);
   offset += 1; // records count
+
+  buf.writeUInt32BE(offset - dataStart, dataLenOffset); // ← TO'G'RI data length
+
   buf.writeUInt32BE(0x00000000, offset);
   offset += 4; // CRC
 

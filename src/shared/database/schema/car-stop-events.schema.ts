@@ -8,7 +8,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { cars } from './cars.schema';
 
-export const carStopEventsSchema = pgTable('car_stop_events', {
+export const carStopEvents = pgTable('car_stop_events', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   carId: bigint('car_id', { mode: 'number' })
     .references(() => cars.id)
