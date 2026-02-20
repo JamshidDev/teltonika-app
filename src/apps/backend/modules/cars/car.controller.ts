@@ -16,8 +16,10 @@ import {
   CreateCarDto,
 } from '@/apps/backend/modules/cars/car.dto';
 import { PaginationDto } from '@/shared/dto/common.dto';
-import { ApiCreatedResponse } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiCreatedResponse, ApiTags } from '@nestjs/swagger';
 
+@ApiBearerAuth()
+@ApiTags('Cars')
 @Controller('api/car')
 export class CarController {
   constructor(private readonly carService: CarService) {}

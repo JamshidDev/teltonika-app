@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "typeRoots": ["./src/shared/types", "./node_modules/@types"],
     "paths": {
       "@/*": ["src/*"],
       "@config/*": ["src/shared/config/*"],
@@ -26,5 +27,5 @@
     "noImplicitAny": false,
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false
-  }
+  },
 }
