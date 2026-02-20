@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "password" varchar(255) NOT NULL DEFAULT '$2b$10$oXagY1mSAU/sFiDBjrwAOu9LXEg3f4Sb.yg39yF7psljha1xeUVtS';
