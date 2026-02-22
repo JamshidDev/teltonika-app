@@ -4,6 +4,13 @@ import * as net from 'net';
 import { TcpConfig } from '@config/tcp.config';
 import { Codec8Parser } from './codec8.parser';
 import { PositionService } from './position.service';
+import {
+  POSITION_JOBS,
+  POSITION_QUEUE,
+  SaveRecordsJobData,
+} from '@/teltonika/position.job';
+import { Queue } from 'bullmq';
+import { InjectQueue } from '@nestjs/bullmq';
 
 interface Session {
   imei: string | null;
@@ -20,6 +27,8 @@ export class TeltonikaService implements OnModuleInit {
     private readonly tcpConfig: TcpConfig,
     private readonly codec8Parser: Codec8Parser,
     private readonly positionService: PositionService,
+    @InjectQueue(POSITION_QUEUE)
+    private readonly positionQueue: Queue<SaveRecordsJobData>,
   ) {}
 
   onModuleInit() {
@@ -98,7 +107,10 @@ export class TeltonikaService implements OnModuleInit {
         );
 
         if (session.carId) {
-          await this.positionService.saveRecords(session.carId, parsed.records);
+          await this.positionQueue.add(POSITION_JOBS.SAVE_RECORDS, {
+            carId: session.carId,
+            records: parsed.records,
+          });
         }
 
         // ACK

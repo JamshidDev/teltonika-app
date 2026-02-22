@@ -18,6 +18,10 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.cars.id,
       to: r.carPositions.carId,
     }),
+    lastPosition: r.one.carLastPositions({
+      from: r.cars.id,
+      to: r.carLastPositions.carId,
+    }),
     stopEvents: r.many.carStopEvents({
       from: r.cars.id,
       to: r.carStopEvents.carId,
@@ -31,6 +35,13 @@ export const relations = defineRelations(schema, (r) => ({
   carPositions: {
     car: r.one.cars({
       from: r.carPositions.carId,
+      to: r.cars.id,
+    }),
+  },
+
+  carLastPositions: {
+    car: r.one.cars({
+      from: r.carLastPositions.carId,
       to: r.cars.id,
     }),
   },

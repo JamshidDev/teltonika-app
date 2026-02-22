@@ -7,6 +7,7 @@ import {
   integer,
   pgTable,
   timestamp,
+  jsonb,
 } from 'drizzle-orm/pg-core';
 import { cars } from './cars.schema';
 
@@ -23,6 +24,7 @@ export const carPositions = pgTable(
     angle: integer('angle'),
     satellites: integer('satellites'),
     ignition: boolean('ignition'),
+    rawIo: jsonb('raw_io'),
     recordedAt: timestamp('recorded_at').notNull(),
     createdAt: timestamp('created_at').defaultNow(),
   },

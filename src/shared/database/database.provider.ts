@@ -20,7 +20,7 @@ export const createDrizzleDb = (config: DbConfig) => {
   return drizzle(pool, {
     schema,
     relations,
-    logger: true,
+    logger: false,
   });
 };
 

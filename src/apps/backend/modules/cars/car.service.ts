@@ -2,8 +2,8 @@
 import { Injectable } from '@nestjs/common';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
-import { cars } from '@/shared/database/schema';
-import { eq } from 'drizzle-orm';
+import { carLastPositions, cars } from '@/shared/database/schema';
+import { eq, count } from 'drizzle-orm';
 import { paginate } from '@/shared/helper/paginate';
 import { PaginationDto } from '@/shared/dto/common.dto';
 import {
@@ -57,5 +57,49 @@ export class CarService {
       .limit(1);
 
     return result[0] ?? null;
+  }
+
+  async getLastPositions(dto: PaginationDto) {
+    const page = Math.max(dto.page ?? 1, 1);
+    const pageSize = Math.min(Math.max(dto.pageSize ?? 20, 1), 100);
+    const offset = (page - 1) * pageSize;
+
+    const [data, countResult] = await Promise.all([
+      this.db
+        .select({
+          carId: cars.id,
+          name: cars.name,
+          deviceImei: cars.deviceImei,
+          deviceModel: cars.deviceModel,
+          lat: carLastPositions.latitude,
+          lng: carLastPositions.longitude,
+          speed: carLastPositions.speed,
+          angle: carLastPositions.angle,
+          ignition: carLastPositions.ignition,
+          movement: carLastPositions.movement,
+          recordedAt: carLastPositions.recordedAt,
+        })
+        .from(cars)
+        .leftJoin(carLastPositions, eq(cars.id, carLastPositions.carId))
+        .offset(offset)
+        .limit(pageSize),
+
+      this.db.select({ total: count() }).from(cars),
+    ]);
+
+    const total = Number(countResult[0]?.total ?? 0);
+    const totalPages = Math.ceil(total / pageSize);
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        pageSize,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+      },
+    };
   }
 }

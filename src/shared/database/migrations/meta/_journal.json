@@ -15,6 +15,20 @@
       "when": 1771577360296,
       "tag": "0001_lethal_king_bedlam",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1771671773944,
+      "tag": "0002_next_gorgon",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1771697124350,
+      "tag": "0003_wandering_tana_nile",
+      "breakpoints": true
     }
   ]
 }

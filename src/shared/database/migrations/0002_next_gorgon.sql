@@ -1,0 +1,1 @@
+ALTER TABLE "car_positions" ADD COLUMN "raw_io" jsonb;

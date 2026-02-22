@@ -26,6 +26,7 @@ export interface GpsRecord {
   satellites: number;
   speed: number;
   io: IoData;
+  rawIo: Record<string, number>;
 }
 
 @Injectable()
@@ -91,6 +92,7 @@ export class Codec8Parser {
           `voltage=${io.externalVoltage}mV, battery=${io.batteryVoltage}mV, ` +
           `gsm=${io.gsmSignal}, odometer=${io.totalOdometer}m, sleep=${io.sleepMode}`,
       );
+      const rawIo = Object.fromEntries(ioEvents);
 
       records.push({
         timestamp,
@@ -102,6 +104,7 @@ export class Codec8Parser {
         satellites,
         speed,
         io,
+        rawIo,
       });
     }
 

@@ -30,6 +30,12 @@ export class CarController {
     return this.carService.findAll(query);
   }
 
+  @Get('last-positions')
+  @ApiPaginatedResponse(CarResponseDto)
+  getLive(@Query() query: PaginationDto) {
+    return this.carService.getLastPositions(query);
+  }
+
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.carService.findOne(id);
