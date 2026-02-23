@@ -18,10 +18,13 @@ export class PositionService {
   constructor(@InjectDb() private db: DataSource) {}
 
   async findCarByImei(imei: string) {
+    // Faqat raqamlarni qoldirish
+    const cleanImei = imei.replace(/[^\x20-\x7E]/g, '').trim();
+
     const result = await this.db
       .select()
       .from(cars)
-      .where(eq(cars.deviceImei, imei))
+      .where(eq(cars.deviceImei, cleanImei))
       .limit(1);
 
     return result[0] ?? null;

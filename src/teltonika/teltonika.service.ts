@@ -65,7 +65,11 @@ export class TeltonikaService implements OnModuleInit {
     // 1-qadam: IMEI
     if (!session.imei) {
       const imeiLength = data.readUInt16BE(0);
-      session.imei = data.subarray(2, 2 + imeiLength).toString('ascii');
+      session.imei = data
+        .subarray(2, 2 + imeiLength)
+        .toString('ascii')
+        .replace(/[^\x20-\x7E]/g, '')
+        .trim();
       this.logger.log(`IMEI: ${session.imei}`);
 
       const car = await this.positionService.findCarByImei(session.imei);
