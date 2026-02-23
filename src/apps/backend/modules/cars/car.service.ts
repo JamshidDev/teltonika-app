@@ -121,7 +121,10 @@ export class CarService {
         .offset(offset)
         .limit(pageSize),
 
-      this.db.select({ total: count() }).from(cars),
+      this.db
+        .select({ total: count() })
+        .from(cars)
+        .innerJoin(carLastPositions, eq(cars.id, carLastPositions.carId)),
     ]);
 
     const total = Number(countResult[0]?.total ?? 0);
