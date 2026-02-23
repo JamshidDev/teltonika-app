@@ -13,6 +13,7 @@ import { RedisConfig } from '@config/redis.config';
 import KeyvRedis from '@keyv/redis';
 import Keyv from 'keyv';
 import { GatewayModule } from '@/shared/gateway/gateway.module';
+import { HistoryModule } from '@/apps/backend/modules/history/history.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { GatewayModule } from '@/shared/gateway/gateway.module';
     AuthModule,
     CarModule,
     GatewayModule,
+    HistoryModule,
   ],
   controllers: [],
   providers: [

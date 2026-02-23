@@ -1,9 +1,12 @@
-// src/cars/cars.service.ts
-import { Injectable } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
 import { carLastPositions, cars } from '@/shared/database/schema';
-import { eq, count } from 'drizzle-orm';
+import { count, desc, eq, sql } from 'drizzle-orm';
 import { paginate } from '@/shared/helper/paginate';
 import { PaginationDto } from '@/shared/dto/common.dto';
 import {
@@ -23,6 +26,15 @@ export class CarService {
   }
 
   async create(dto: CreateCarDto) {
+    const existing = await this.db
+      .select()
+      .from(cars)
+      .where(eq(cars.deviceImei, dto.deviceImei))
+      .limit(1);
+
+    if (existing[0]) {
+      throw new ConflictException('Bu IMEI allaqachon mavjud');
+    }
     const result = await this.db
       .insert(cars)
       .values({
@@ -45,6 +57,16 @@ export class CarService {
   }
 
   async remove(id: number) {
+    const existing = await this.db
+      .select()
+      .from(cars)
+      .where(eq(cars.id, id))
+      .limit(1);
+
+    if (!existing[0]) {
+      throw new NotFoundException('Mashina topilmadi');
+    }
+
     await this.db.delete(cars).where(eq(cars.id, id));
     return { deleted: true };
   }
@@ -56,7 +78,11 @@ export class CarService {
       .where(eq(cars.id, id))
       .limit(1);
 
-    return result[0] ?? null;
+    if (!result[0]) {
+      throw new NotFoundException('Mashina topilmadi');
+    }
+
+    return result[0];
   }
 
   async getLastPositions(dto: PaginationDto) {
@@ -81,6 +107,7 @@ export class CarService {
         })
         .from(cars)
         .leftJoin(carLastPositions, eq(cars.id, carLastPositions.carId))
+        .orderBy(sql`${carLastPositions.updatedAt} DESC NULLS LAST`)
         .offset(offset)
         .limit(pageSize),
 

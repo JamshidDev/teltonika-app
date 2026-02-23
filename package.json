@@ -30,6 +30,8 @@
     "@nestjs/platform-socket.io": "^11.1.14",
     "@nestjs/swagger": "^11.2.6",
     "@nestjs/websockets": "^11.1.14",
+    "@turf/helpers": "^7.3.4",
+    "@turf/simplify": "^7.3.4",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.70.0",
     "class-transformer": "^0.5.1",
