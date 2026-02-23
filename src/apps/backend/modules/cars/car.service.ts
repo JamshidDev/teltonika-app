@@ -6,7 +6,7 @@ import {
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
 import { carLastPositions, cars } from '@/shared/database/schema';
-import { count, desc, eq, sql } from 'drizzle-orm';
+import { count, eq, sql } from 'drizzle-orm';
 import { paginate } from '@/shared/helper/paginate';
 import { PaginationDto } from '@/shared/dto/common.dto';
 import {
@@ -48,12 +48,22 @@ export class CarService {
   }
 
   async update(id: number, dto: UpdateCarDto) {
+    const existing = await this.db
+      .select()
+      .from(cars)
+      .where(eq(cars.id, id))
+      .limit(1);
+
+    if (!existing[0]) {
+      throw new NotFoundException('Mashina topilmadi');
+    }
+
     const result = await this.db
       .update(cars)
       .set(dto)
       .where(eq(cars.id, id))
       .returning();
-    return result[0] ?? null;
+    return result[0];
   }
 
   async remove(id: number) {
@@ -106,7 +116,7 @@ export class CarService {
           recordedAt: carLastPositions.recordedAt,
         })
         .from(cars)
-        .leftJoin(carLastPositions, eq(cars.id, carLastPositions.carId))
+        .innerJoin(carLastPositions, eq(cars.id, carLastPositions.carId))
         .orderBy(sql`${carLastPositions.updatedAt} DESC NULLS LAST`)
         .offset(offset)
         .limit(pageSize),
