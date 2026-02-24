@@ -6,10 +6,13 @@ import { and, asc, between, count, desc, eq } from 'drizzle-orm';
 import { CarHistoryDto, CarRouteDto } from './history.dto';
 import simplify from '@turf/simplify';
 import { lineString } from '@turf/helpers';
+import { RouteConfig } from '@config/route.config';
 
 @Injectable()
 export class HistoryService {
-  constructor(@InjectDb() private db: DataSource) {}
+  constructor(@InjectDb() private db: DataSource,
+    private readonly routeConfig: RouteConfig,
+  ) {}
 
   async getCarPositions(dto: CarHistoryDto) {
     const page = Math.max(dto.page ?? 1, 1);
