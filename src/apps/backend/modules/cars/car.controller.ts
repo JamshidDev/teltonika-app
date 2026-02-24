@@ -6,17 +6,20 @@ import {
   Get,
   Param,
   ParseIntPipe,
-  Post, Put,
+  Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import { CarService } from './car.service';
 import { ApiPaginatedResponse } from '@/shared/decarators/api-paginated-response';
 import {
   CarResponseDto,
-  CreateCarDto, UpdateCarDto,
+  CreateCarDto,
+  UpdateCarDto,
 } from '@/apps/backend/modules/cars/car.dto';
 import { PaginationDto } from '@/shared/dto/common.dto';
 import { ApiBearerAuth, ApiCreatedResponse, ApiTags } from '@nestjs/swagger';
+import { GetUser } from '@/shared/decarators/get-user.decorator';
 
 @ApiBearerAuth()
 @ApiTags('Cars')
@@ -43,8 +46,8 @@ export class CarController {
 
   @Post()
   @ApiCreatedResponse({ type: CarResponseDto })
-  create(@Body() dto: CreateCarDto) {
-    return this.carService.create(dto);
+  create(@Body() dto: CreateCarDto, @GetUser('id') userId: number) {
+    return this.carService.create(dto, userId);
   }
 
   @Put(':id')

@@ -3,10 +3,6 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 
 export class CreateCarDto {
-  @ApiProperty({ example: 1 })
-  @IsNumber()
-  @Type(() => Number)
-  userId: number;
 
   @ApiProperty({ example: 'Damas' })
   @IsString()

@@ -78,7 +78,7 @@ export class CarService {
     };
   }
 
-  async create(dto: CreateCarDto) {
+  async create(dto: CreateCarDto, userId: number) {
     const device = await this.db
       .select()
       .from(devices)
@@ -104,7 +104,7 @@ export class CarService {
     const [car] = await this.db
       .insert(cars)
       .values({
-        userId: dto.userId,
+        userId: userId,
         name: dto.name,
         carNumber: dto.carNumber,
       })
