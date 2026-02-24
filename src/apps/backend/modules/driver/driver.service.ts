@@ -2,10 +2,11 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
-import { drivers } from '@/shared/database/schema';
+import { carDrivers, drivers } from '@/shared/database/schema';
 import { and, count, eq, isNull } from 'drizzle-orm';
 import { PaginationDto } from '@/shared/dto/common.dto';
 import { CreateDriverDto, UpdateDriverDto } from './driver.dto';
@@ -13,6 +14,15 @@ import { CreateDriverDto, UpdateDriverDto } from './driver.dto';
 @Injectable()
 export class DriverService {
   constructor(@InjectDb() private db: DataSource) {}
+
+  private async isDriverInUse(id: number): Promise<boolean> {
+    const result = await this.db
+      .select()
+      .from(carDrivers)
+      .where(and(eq(carDrivers.driverId, id), isNull(carDrivers.endAt)))
+      .limit(1);
+    return !!result[0];
+  }
 
   async findAll(dto: PaginationDto) {
     const page = Math.max(dto.page ?? 1, 1);
@@ -122,6 +132,13 @@ export class DriverService {
 
     if (!existing[0]) {
       throw new NotFoundException('Haydovchi topilmadi');
+    }
+
+    const inUse = await this.isDriverInUse(id);
+    if (inUse) {
+      throw new BadRequestException(
+        'Haydovchi mashinaga biriktirilgan, avval mashinadan uzib oling',
+      );
     }
 
     await this.db

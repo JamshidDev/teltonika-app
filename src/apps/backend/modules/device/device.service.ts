@@ -1,12 +1,12 @@
-// device.service.ts
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
-import { devices } from '@/shared/database/schema';
+import { carDevices, devices } from '@/shared/database/schema';
 import { and, count, eq, isNull } from 'drizzle-orm';
 import { PaginationDto } from '@/shared/dto/common.dto';
 import { CreateDeviceDto, UpdateDeviceDto } from './device.dto';
@@ -14,6 +14,15 @@ import { CreateDeviceDto, UpdateDeviceDto } from './device.dto';
 @Injectable()
 export class DeviceService {
   constructor(@InjectDb() private db: DataSource) {}
+
+  private async isDeviceInUse(id: number): Promise<boolean> {
+    const result = await this.db
+      .select()
+      .from(carDevices)
+      .where(and(eq(carDevices.deviceId, id), isNull(carDevices.endAt)))
+      .limit(1);
+    return !!result[0];
+  }
 
   async findAll(dto: PaginationDto) {
     const page = Math.max(dto.page ?? 1, 1);
@@ -97,22 +106,20 @@ export class DeviceService {
       throw new NotFoundException('Device topilmadi');
     }
 
-    if (dto.imei) {
-      const imeiExists = await this.db
-        .select()
-        .from(devices)
-        .where(and(eq(devices.imei, dto.imei), isNull(devices.deletedAt)))
-        .limit(1);
-
-      if (imeiExists[0] && imeiExists[0].id !== id) {
-        throw new ConflictException('Bu IMEI allaqachon mavjud');
+    // Carga biriktirilgan bo'lsa IMEI o'zgartirishga ruxsat yo'q
+    if (dto.imei && dto.imei !== existing[0].imei) {
+      const inUse = await this.isDeviceInUse(id);
+      if (inUse) {
+        throw new BadRequestException(
+          "Device mashinaga biriktirilgan, IMEI ni o'zgartirish mumkin emas",
+        );
       }
     }
 
     const [updated] = await this.db
       .update(devices)
       .set({
-        imei: dto.imei,
+        imei: dto.imei ?? existing[0].imei,
         model: dto.model,
         updatedAt: new Date(),
       })
@@ -131,6 +138,14 @@ export class DeviceService {
 
     if (!existing[0]) {
       throw new NotFoundException('Device topilmadi');
+    }
+
+    // Carga biriktirilgan bo'lsa o'chirish mumkin emas
+    const inUse = await this.isDeviceInUse(id);
+    if (inUse) {
+      throw new BadRequestException(
+        'Device mashinaga biriktirilgan, avval mashinadan uzib oling',
+      );
     }
 
     await this.db
