@@ -16,11 +16,12 @@ export const cars = pgTable(
       .references(() => users.id)
       .notNull(),
     name: varchar('name', { length: 100 }).notNull(),
-    deviceImei: varchar('device_imei', { length: 20 }).unique().notNull(),
-    deviceModel: varchar('device_model', { length: 50 }),
+    carNumber: varchar('car_number', { length: 20 }).unique(),
     createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+    deletedAt: timestamp('deleted_at'),
   },
   (table) => ({
-    imeiIdx: index('idx_cars_device_imei').on(table.deviceImei),
+    deletedAtIdx: index('idx_cars_deleted_at').on(table.deletedAt),
   }),
 );

@@ -5,11 +5,13 @@ import {
   doublePrecision,
   index,
   integer,
+  jsonb,
   pgTable,
   timestamp,
-  jsonb,
 } from 'drizzle-orm/pg-core';
 import { cars } from './cars.schema';
+import { drivers } from './drivers.schema';
+import { devices } from './devices.schema';
 
 export const carPositions = pgTable(
   'car_positions',
@@ -18,6 +20,12 @@ export const carPositions = pgTable(
     carId: bigint('car_id', { mode: 'number' })
       .references(() => cars.id)
       .notNull(),
+    driverId: bigint('driver_id', { mode: 'number' }).references(
+      () => drivers.id,
+    ),
+    deviceId: bigint('device_id', { mode: 'number' }).references(
+      () => devices.id,
+    ),
     latitude: doublePrecision('latitude').notNull(),
     longitude: doublePrecision('longitude').notNull(),
     speed: integer('speed'),

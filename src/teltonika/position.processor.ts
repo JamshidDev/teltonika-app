@@ -17,9 +17,9 @@ export class PositionProcessor extends WorkerHost {
   private readonly logger = new Logger('PositionProcessor');
 
   async process(job: Job<SaveRecordsJobData>) {
-    const { carId, records } = job.data;
+    const { carId, records, deviceId } = job.data;
     this.logger.log(`Job boshlandi: ${job.id}`);
-    await this.positionService.saveRecords(carId, records);
+    await this.positionService.saveRecords(carId, records, deviceId);
     const last = records[records.length - 1];
     this.trackingGateway.emitCarLocation({
       carId,

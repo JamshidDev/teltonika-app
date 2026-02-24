@@ -1,53 +1,60 @@
-import {
-  IsDateString,
-  IsNumber,
-  IsOptional,
-  IsString,
-  MaxLength,
-} from 'class-validator';
+import { IsNumber, IsOptional, IsString, MaxLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-
-export class GetPositionsDto {
-  @IsDateString()
-  from: string;
-
-  @IsDateString()
-  to: string;
-}
+import { Type } from 'class-transformer';
 
 export class CreateCarDto {
+  @ApiProperty({ example: 1 })
   @IsNumber()
+  @Type(() => Number)
   userId: number;
 
+  @ApiProperty({ example: 'Damas' })
   @IsString()
   @MaxLength(100)
   name: string;
 
-  @IsString()
-  @MaxLength(20)
-  deviceImei: string;
-
+  @ApiPropertyOptional({ example: '01A123BC' })
   @IsString()
   @IsOptional()
-  @MaxLength(50)
-  deviceModel?: string;
+  @MaxLength(20)
+  carNumber?: string;
+
+  @ApiProperty({ example: 1 })
+  @IsNumber()
+  @Type(() => Number)
+  deviceId: number;
+
+  @ApiPropertyOptional({ example: 1 })
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  driverId?: number;
 }
 
 export class UpdateCarDto {
+  @ApiPropertyOptional({ example: 'Damas' })
   @IsString()
   @IsOptional()
   @MaxLength(100)
   name?: string;
 
+  @ApiPropertyOptional({ example: '01A123BC' })
   @IsString()
   @IsOptional()
   @MaxLength(20)
-  deviceImei?: string;
+  carNumber?: string;
 
-  @IsString()
+  @ApiPropertyOptional({ example: 1 })
+  @IsNumber()
   @IsOptional()
-  @MaxLength(50)
-  deviceModel?: string;
+  @Type(() => Number)
+  deviceId?: number;
+
+  @ApiPropertyOptional({ example: 1 })
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  driverId?: number;
 }
 
 export class CarResponseDto {
@@ -57,15 +64,21 @@ export class CarResponseDto {
   @ApiProperty({ example: 1 })
   userId: number;
 
-  @ApiProperty({ example: 'Nexia' })
+  @ApiProperty({ example: 'Damas' })
   name: string;
 
-  @ApiProperty({ example: '352093089612345' })
-  deviceImei: string;
+  @ApiPropertyOptional({ example: '01A123BC' })
+  carNumber: string | null;
 
-  @ApiPropertyOptional({ example: 'FMB120' })
-  deviceModel: string | null;
+  @ApiPropertyOptional({ example: 1 })
+  deviceId: number | null;
+
+  @ApiPropertyOptional({ example: 1 })
+  driverId: number | null;
 
   @ApiProperty({ example: '2026-02-18T14:07:52.846Z' })
   createdAt: Date;
+
+  @ApiPropertyOptional({ example: '2026-02-18T14:07:52.846Z' })
+  updatedAt: Date | null;
 }

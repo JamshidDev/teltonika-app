@@ -4,3 +4,7 @@ export * from './car-positions.schema';
 export * from './car-stop-events.schema';
 export * from './car-engine-events.schema';
 export * from './car-last-position.schema';
+export * from './drivers.schema';
+export * from './devices.schema';
+export * from './car-devices.schema';
+export * from './car-drivers.schema';

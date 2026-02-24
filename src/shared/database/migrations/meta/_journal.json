@@ -29,6 +29,34 @@
       "when": 1771697124350,
       "tag": "0003_wandering_tana_nile",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1771866069340,
+      "tag": "0004_magenta_union_jack",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1771866417800,
+      "tag": "0005_glossy_the_hand",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1771937404069,
+      "tag": "0006_daily_sister_grimm",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1771937764754,
+      "tag": "0007_pale_black_crow",
+      "breakpoints": true
     }
   ]
 }

@@ -15,6 +15,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 interface Session {
   imei: string | null;
   carId: number | null;
+  deviceId: number | null;
   buffer: Buffer;
 }
 
@@ -36,6 +37,7 @@ export class TeltonikaService implements OnModuleInit {
       this.sessions.set(socket, {
         imei: null,
         carId: null,
+        deviceId: null,
         buffer: Buffer.alloc(0),
       });
       this.logger.log(`Yangi ulanish: ${socket.remoteAddress}`);
@@ -81,6 +83,7 @@ export class TeltonikaService implements OnModuleInit {
       }
 
       session.carId = car.id;
+      session.deviceId = car.deviceId;
       socket.write(Buffer.from([0x01]));
       return;
     }
@@ -113,6 +116,7 @@ export class TeltonikaService implements OnModuleInit {
         if (session.carId) {
           await this.positionQueue.add(POSITION_JOBS.SAVE_RECORDS, {
             carId: session.carId,
+            deviceId: session.deviceId,
             records: parsed.records,
           });
         }

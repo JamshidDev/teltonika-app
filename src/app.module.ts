@@ -14,6 +14,8 @@ import KeyvRedis from '@keyv/redis';
 import Keyv from 'keyv';
 import { GatewayModule } from '@/shared/gateway/gateway.module';
 import { HistoryModule } from '@/apps/backend/modules/history/history.module';
+import { DriverModule } from '@/apps/backend/modules/driver/driver.module';
+import { DeviceModule } from '@/apps/backend/modules/device/device.module';
 
 @Module({
   imports: [
@@ -43,6 +45,8 @@ import { HistoryModule } from '@/apps/backend/modules/history/history.module';
     CarModule,
     GatewayModule,
     HistoryModule,
+    DriverModule,
+    DeviceModule,
   ],
   controllers: [],
   providers: [

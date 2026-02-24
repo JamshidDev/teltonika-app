@@ -2,11 +2,14 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
 import {
+  carDevices,
+  carDrivers,
   carEngineEvents,
   carLastPositions,
   carPositions,
   cars,
   carStopEvents,
+  devices,
 } from '@/shared/database/schema';
 import { and, eq, isNull } from 'drizzle-orm';
 import { GpsRecord } from './codec8.parser';
@@ -18,42 +21,62 @@ export class PositionService {
   constructor(@InjectDb() private db: DataSource) {}
 
   async findCarByImei(imei: string) {
-    // Faqat raqamlarni qoldirish
     const cleanImei = imei.replace(/[^\x20-\x7E]/g, '').trim();
 
     const result = await this.db
-      .select()
-      .from(cars)
-      .where(eq(cars.deviceImei, cleanImei))
+      .select({
+        id: cars.id,
+        name: cars.name,
+        deviceId: carDevices.deviceId,
+      })
+      .from(devices)
+      .innerJoin(
+        carDevices,
+        and(eq(carDevices.deviceId, devices.id), isNull(carDevices.endAt)),
+      )
+      .innerJoin(cars, eq(cars.id, carDevices.carId))
+      .where(eq(devices.imei, cleanImei))
       .limit(1);
 
     return result[0] ?? null;
   }
 
-  async saveRecords(carId: number, records: GpsRecord[]) {
+  async saveRecords(
+    carId: number,
+    records: GpsRecord[],
+    deviceId?: number | null,
+  ) {
     try {
       this.logger.log(
         `saveRecords boshlandi, carId: ${carId}, records: ${records.length}`,
       );
 
       // 1. Oldingi holatlarni bir marta ol
-      const [lastPositionResult, openStopResult] = await Promise.all([
-        this.db
-          .select({ ignition: carLastPositions.ignition })
-          .from(carLastPositions)
-          .where(eq(carLastPositions.carId, carId))
-          .limit(1),
+      const [lastPositionResult, openStopResult, currentDriverResult] =
+        await Promise.all([
+          this.db
+            .select({ ignition: carLastPositions.ignition })
+            .from(carLastPositions)
+            .where(eq(carLastPositions.carId, carId))
+            .limit(1),
 
-        this.db
-          .select()
-          .from(carStopEvents)
-          .where(
-            and(eq(carStopEvents.carId, carId), isNull(carStopEvents.endAt)),
-          )
-          .limit(1),
-      ]);
+          this.db
+            .select()
+            .from(carStopEvents)
+            .where(
+              and(eq(carStopEvents.carId, carId), isNull(carStopEvents.endAt)),
+            )
+            .limit(1),
+
+          this.db
+            .select({ driverId: carDrivers.driverId })
+            .from(carDrivers)
+            .where(and(eq(carDrivers.carId, carId), isNull(carDrivers.endAt)))
+            .limit(1),
+        ]);
 
       const prevIgnition = lastPositionResult[0]?.ignition ?? null;
+      const driverId = currentDriverResult[0]?.driverId ?? null;
       let openStop: (typeof openStopResult)[0] | null =
         openStopResult[0] ?? null;
 
@@ -61,6 +84,8 @@ export class PositionService {
       await this.db.insert(carPositions).values(
         records.map((r) => ({
           carId,
+          deviceId: deviceId ?? null,
+          driverId: driverId ?? null,
           latitude: r.lat,
           longitude: r.lng,
           speed: r.speed,
@@ -100,7 +125,7 @@ export class PositionService {
               latitude: record.lat,
               longitude: record.lng,
             });
-          } else if (currentIgnition === true && currIgnition === false) {
+          } else if (currentIgnition === true && !currIgnition) {
             this.logger.log(`Engine OFF: carId=${carId}`);
             engineEvents.push({
               carId,
@@ -115,7 +140,6 @@ export class PositionService {
 
         // Stop event
         if (isStopped && !openStop) {
-          // Yangi stop boshladi
           const newStop = {
             carId,
             startAt: recordTime,
@@ -123,28 +147,20 @@ export class PositionService {
             longitude: record.lng,
           };
           stopInserts.push(newStop);
-          openStop = {
-            id: -1,
-            endAt: null,
-            durationSeconds: null,
-            ...newStop,
-          };
+          openStop = { id: -1, endAt: null, durationSeconds: null, ...newStop };
           this.logger.log(`Stop boshladi: carId=${carId}`);
         } else if (!isStopped && openStop) {
-          // Stop tugadi
           const durationSeconds = Math.floor(
             (recordTime.getTime() - openStop.startAt.getTime()) / 1000,
           );
 
           if (openStop.id !== -1) {
-            // DB da mavjud stop — update
             stopUpdates.push({
               id: openStop.id,
               endAt: recordTime,
               durationSeconds,
             });
           } else {
-            // Yangi insert qilingan stop — stopInserts ichidagi oxirgisini yangilaymiz
             const lastInsert = stopInserts[stopInserts.length - 1];
             if (lastInsert) {
               lastInsert.endAt = recordTime;
