@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
-import { carPositions, cars } from '@/shared/database/schema';
+import { carPositions, cars, devices, drivers } from '@/shared/database/schema';
 import { and, asc, between, count, desc, eq } from 'drizzle-orm';
 import { CarHistoryDto, CarRouteDto } from './history.dto';
 import simplify from '@turf/simplify';
@@ -34,9 +34,21 @@ export class HistoryService {
           recordedAt: carPositions.recordedAt,
           createdAt: carPositions.createdAt,
           rawIo: carPositions.rawIo,
+          device: {
+            id: devices.id,
+            imei: devices.imei,
+            model: devices.model,
+          },
+          driver: {
+            id: drivers.id,
+            fullName: drivers.fullName,
+            phone: drivers.phone,
+          },
         })
         .from(carPositions)
         .leftJoin(cars, eq(carPositions.carId, cars.id))
+        .leftJoin(devices, eq(carPositions.deviceId, devices.id))
+        .leftJoin(drivers, eq(carPositions.driverId, drivers.id))
         .where(whereClause)
         .orderBy(desc(carPositions.createdAt))
         .offset(offset)
