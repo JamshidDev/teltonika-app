@@ -26,6 +26,8 @@ export const carPositions = pgTable(
     deviceId: bigint('device_id', { mode: 'number' }).references(
       () => devices.id,
     ),
+    distanceFromPrev: doublePrecision('distance_from_prev'),
+    bytesReceived: integer('bytes_received'),
     latitude: doublePrecision('latitude').notNull(),
     longitude: doublePrecision('longitude').notNull(),
     speed: integer('speed'),

@@ -131,6 +131,7 @@ export class TeltonikaService implements OnModuleInit {
             carId: session.carId,
             deviceId: session.deviceId,
             records: parsed.records,
+            bytesReceived: packet.length,
           });
         }
 

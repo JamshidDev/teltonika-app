@@ -11,7 +11,7 @@ import {
   carStopEvents,
   devices,
 } from '@/shared/database/schema';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { GpsRecord } from './codec8.parser';
 
 @Injectable()
@@ -41,10 +41,24 @@ export class PositionService {
     return result[0] ?? null;
   }
 
+  private async getLastPosition(carId: number) {
+    const result = await this.db.execute(sql`
+      SELECT latitude, longitude
+      FROM car_positions
+      WHERE car_id = ${carId}
+        AND latitude != 0 AND longitude != 0
+      ORDER BY recorded_at DESC LIMIT 1
+    `);
+    return result.rows[0] as
+      | { latitude: number; longitude: number }
+      | undefined;
+  }
+
   async saveRecords(
     carId: number,
     records: GpsRecord[],
     deviceId?: number | null,
+    bytesReceived?: number,
   ) {
     try {
       this.logger.log(
@@ -52,7 +66,7 @@ export class PositionService {
       );
 
       // 1. Oldingi holatlarni bir marta ol
-      const [lastPositionResult, openStopResult, currentDriverResult] =
+      const [lastPositionResult, openStopResult, currentDriverResult, lastPos] =
         await Promise.all([
           this.db
             .select({ ignition: carLastPositions.ignition })
@@ -73,6 +87,8 @@ export class PositionService {
             .from(carDrivers)
             .where(and(eq(carDrivers.carId, carId), isNull(carDrivers.endAt)))
             .limit(1),
+
+          this.getLastPosition(carId),
         ]);
 
       const prevIgnition = lastPositionResult[0]?.ignition ?? null;
@@ -80,12 +96,36 @@ export class PositionService {
       let openStop: (typeof openStopResult)[0] | null =
         openStopResult[0] ?? null;
 
-      // 2. Pozitsiyalarni saqlash
-      await this.db.insert(carPositions).values(
-        records.map((r) => ({
+      // 2. Pozitsiyalarni saqlash — distanceFromPrev hisoblab
+      let prevLat = lastPos?.latitude ?? null;
+      let prevLng = lastPos?.longitude ?? null;
+
+      const positionValues = records.map((r, index) => {
+        let distanceFromPrev: number | null = null;
+
+        if (prevLat !== null && prevLng !== null) {
+          // Haversine formula (metrda)
+          const R = 6371000;
+          const dLat = ((r.lat - prevLat) * Math.PI) / 180;
+          const dLng = ((r.lng - prevLng) * Math.PI) / 180;
+          const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos((prevLat * Math.PI) / 180) *
+              Math.cos((r.lat * Math.PI) / 180) *
+              Math.sin(dLng / 2) *
+              Math.sin(dLng / 2);
+          distanceFromPrev = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        }
+
+        prevLat = r.lat;
+        prevLng = r.lng;
+
+        return {
           carId,
           deviceId: deviceId ?? null,
           driverId: driverId ?? null,
+          distanceFromPrev,
+          bytesReceived: index === 0 ? (bytesReceived ?? null) : null,
           latitude: r.lat,
           longitude: r.lng,
           speed: r.speed,
@@ -94,8 +134,10 @@ export class PositionService {
           ignition: r.io.ignition,
           rawIo: r.rawIo,
           recordedAt: new Date(r.timestamp),
-        })),
-      );
+        };
+      });
+
+      await this.db.insert(carPositions).values(positionValues);
 
       // 3. Engine va Stop eventlarni yig'ish
       const engineEvents: (typeof carEngineEvents.$inferInsert)[] = [];
@@ -114,7 +156,6 @@ export class PositionService {
           (record.speed ?? 0) === 0 && record.io.movement === false;
         const recordTime = new Date(record.timestamp);
 
-        // Engine event
         if (currIgnition !== null) {
           if (currentIgnition === false && currIgnition) {
             this.logger.log(`Engine ON: carId=${carId}`);
@@ -138,7 +179,6 @@ export class PositionService {
           currentIgnition = currIgnition;
         }
 
-        // Stop event
         if (isStopped && !openStop) {
           const newStop = {
             carId,

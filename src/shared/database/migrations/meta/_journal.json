@@ -57,6 +57,13 @@
       "when": 1771937764754,
       "tag": "0007_pale_black_crow",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1772017322070,
+      "tag": "0008_wakeful_amphibian",
+      "breakpoints": true
     }
   ]
 }

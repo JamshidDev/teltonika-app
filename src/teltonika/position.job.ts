@@ -9,5 +9,6 @@ export const POSITION_JOBS = {
 export interface SaveRecordsJobData {
   carId: number;
   deviceId: number | null;
+  bytesReceived: number;
   records: GpsRecord[];
 }
