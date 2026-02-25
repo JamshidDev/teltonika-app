@@ -11,6 +11,7 @@ import {
 } from '@/teltonika/position.job';
 import { Queue } from 'bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
+import { TrackingGateway } from '@/shared/gateway/tracking.gateway';
 
 interface Session {
   imei: string | null;
@@ -28,6 +29,7 @@ export class TeltonikaService implements OnModuleInit {
     private readonly tcpConfig: TcpConfig,
     private readonly codec8Parser: Codec8Parser,
     private readonly positionService: PositionService,
+    private readonly trackingGateway: TrackingGateway,
     @InjectQueue(POSITION_QUEUE)
     private readonly positionQueue: Queue<SaveRecordsJobData>,
   ) {}
@@ -114,6 +116,17 @@ export class TeltonikaService implements OnModuleInit {
         );
 
         if (session.carId) {
+          const last = parsed.records[parsed.records.length - 1];
+          this.trackingGateway.emitCarLocation({
+            carId: session.carId,
+            lat: last.lat,
+            lng: last.lng,
+            speed: last.speed,
+            angle: last.angle,
+            ignition: last.io.ignition,
+            movement: last.io.movement,
+          });
+
           await this.positionQueue.add(POSITION_JOBS.SAVE_RECORDS, {
             carId: session.carId,
             deviceId: session.deviceId,
