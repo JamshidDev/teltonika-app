@@ -2,14 +2,12 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { PositionService } from './position.service';
 import { SaveRecordsJobData } from '@/teltonika/position.job';
-import { TrackingGateway } from '@/shared/gateway/tracking.gateway';
 import { Logger } from '@nestjs/common';
 
 @Processor('gps-position')
 export class PositionProcessor extends WorkerHost {
   constructor(
     private readonly positionService: PositionService,
-    private readonly trackingGateway: TrackingGateway,
   ) {
     super();
   }

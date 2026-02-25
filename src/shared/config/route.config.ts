@@ -11,4 +11,7 @@ export class RouteConfig {
 
   @Value('ROUTE_SEGMENT_GAP_MINUTES')
   segmentGapMinutes: number = 30;
+
+  @Value('ROUTE_MAX_DISTANCE')
+  maxDistance: number = 500;
 }

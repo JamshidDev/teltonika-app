@@ -129,7 +129,7 @@ export class TeltonikaService implements OnModuleInit {
 
           await this.positionQueue.add(POSITION_JOBS.SAVE_RECORDS, {
             carId: session.carId,
-            deviceId: session.deviceId,
+            deviceId: session.deviceId!,
             records: parsed.records,
             bytesReceived: packet.length,
           });
