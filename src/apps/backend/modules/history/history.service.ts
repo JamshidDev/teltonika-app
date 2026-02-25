@@ -37,6 +37,8 @@ export class HistoryService {
           ignition: carPositions.ignition,
           recordedAt: carPositions.recordedAt,
           createdAt: carPositions.createdAt,
+          bytesReceived: carPositions.bytesReceived,
+          distanceFromPrev: carPositions.distanceFromPrev,
           rawIo: carPositions.rawIo,
           device: {
             id: devices.id,
