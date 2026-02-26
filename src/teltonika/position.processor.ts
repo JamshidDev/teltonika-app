@@ -26,6 +26,10 @@ export class PositionProcessor extends WorkerHost {
       bytesReceived,
     );
 
-    await this.motionStateService.processRecords(carId, records);
+    try {
+      await this.motionStateService.processRecords(carId, records);
+    } catch (error) {
+      this.logger.error(`MotionState xato: carId=${carId}`, error);
+    }
   }
 }
