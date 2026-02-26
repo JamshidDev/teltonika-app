@@ -1,6 +1,7 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { PositionService } from './position.service';
+import { MotionStateService } from './motion-state.service';
 import { SaveRecordsJobData } from '@/teltonika/position.job';
 import { Logger } from '@nestjs/common';
 
@@ -8,6 +9,7 @@ import { Logger } from '@nestjs/common';
 export class PositionProcessor extends WorkerHost {
   constructor(
     private readonly positionService: PositionService,
+    private readonly motionStateService: MotionStateService,
   ) {
     super();
   }
@@ -23,5 +25,7 @@ export class PositionProcessor extends WorkerHost {
       deviceId,
       bytesReceived,
     );
+
+    await this.motionStateService.processRecords(carId, records);
   }
 }
