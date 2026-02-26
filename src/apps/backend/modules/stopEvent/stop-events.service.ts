@@ -35,6 +35,7 @@ export class StopEventsService {
           id: carStopEvents.id,
           carId: carStopEvents.carId,
           carName: cars.name,
+          carNumber: cars.carNumber,
           type: carStopEvents.type,
           startAt: carStopEvents.startAt,
           endAt: carStopEvents.endAt,

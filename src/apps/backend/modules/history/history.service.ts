@@ -29,6 +29,7 @@ export class HistoryService {
           id: carPositions.id,
           carId: carPositions.carId,
           carName: cars.name,
+          carNumber: cars.carNumber,
           latitude: carPositions.latitude,
           longitude: carPositions.longitude,
           speed: carPositions.speed,
