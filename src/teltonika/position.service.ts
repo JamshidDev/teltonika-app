@@ -14,6 +14,8 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import { GpsRecord } from './codec8.parser';
 import { RouteConfig } from '@config/route.config';
 
+const ENGINE_DEBOUNCE_SECONDS = 30;
+
 @Injectable()
 export class PositionService {
   private readonly logger = new Logger('Position');
@@ -122,9 +124,11 @@ export class PositionService {
     carId: number,
     records: GpsRecord[],
     prevIgnition: boolean | null,
+    prevEventAt: Date | null,
   ) {
     const engineEvents: (typeof carEngineEvents.$inferInsert)[] = [];
     let currentIgnition = prevIgnition;
+    let lastEventTime = prevEventAt;
 
     for (const record of records) {
       const currIgnition = record.io.ignition;
@@ -132,12 +136,11 @@ export class PositionService {
 
       if (currIgnition === null) continue;
 
-      // 🔥 1️⃣ Agar DB da ignition yo‘q bo‘lsa (initial state)
+      // Initial state — DB da hech narsa yo'q
       if (currentIgnition === null) {
         this.logger.log(
           `Engine initial state: carId=${carId}, ignition=${currIgnition}`,
         );
-
         engineEvents.push({
           carId,
           eventType: currIgnition ? 'on' : 'off',
@@ -145,17 +148,42 @@ export class PositionService {
           latitude: record.lat,
           longitude: record.lng,
         });
-
         currentIgnition = currIgnition;
+        lastEventTime = recordTime;
         continue;
       }
 
-      // 🔥 2️⃣ Oddiy state change
-      if (currentIgnition !== currIgnition) {
+      // Ignition o'zgarmagan — o'tkazib yubor
+      if (currentIgnition === currIgnition) continue;
+
+      // Ignition o'zgardi — debounce tekshir
+      const gap = lastEventTime
+        ? (recordTime.getTime() - lastEventTime.getTime()) / 1000
+        : Infinity;
+
+      if (gap < ENGINE_DEBOUNCE_SECONDS) {
+        // Jitter — 30s dan kam vaqt o'tgan
+        if (engineEvents.length > 0) {
+          // Batch ichidagi oxirgi eventni almashtiramiz
+          const last = engineEvents[engineEvents.length - 1];
+          last.eventType = currIgnition ? 'on' : 'off';
+          last.eventAt = recordTime;
+          last.latitude = record.lat;
+          last.longitude = record.lng;
+          this.logger.debug(
+            `Engine debounce (batch): carId=${carId}, almashtirildi → ${currIgnition ? 'ON' : 'OFF'}`,
+          );
+        } else {
+          // DB dagi oxirgi event bilan jitter — o'tkazib yuboramiz
+          this.logger.debug(
+            `Engine debounce (DB): carId=${carId}, o'tkazib yuborildi`,
+          );
+        }
+      } else {
+        // 30s+ o'tgan — haqiqiy o'zgarish
         this.logger.log(
           `Engine ${currIgnition ? 'ON' : 'OFF'}: carId=${carId}`,
         );
-
         engineEvents.push({
           carId,
           eventType: currIgnition ? 'on' : 'off',
@@ -163,9 +191,10 @@ export class PositionService {
           latitude: record.lat,
           longitude: record.lng,
         });
-
-        currentIgnition = currIgnition;
+        lastEventTime = recordTime;
       }
+
+      currentIgnition = currIgnition;
     }
 
     return engineEvents;
@@ -193,19 +222,24 @@ export class PositionService {
           this.getLastPosition(carId),
 
           this.db
-            .select({ eventType: carEngineEvents.eventType })
+            .select({
+              eventType: carEngineEvents.eventType,
+              eventAt: carEngineEvents.eventAt,
+            })
             .from(carEngineEvents)
             .where(eq(carEngineEvents.carId, carId))
             .orderBy(desc(carEngineEvents.eventAt))
             .limit(1),
         ]);
 
+      const lastEvent = lastEngineEventResult[0];
       const prevIgnition =
-        lastEngineEventResult[0]?.eventType === 'on'
+        lastEvent?.eventType === 'on'
           ? true
-          : lastEngineEventResult[0]?.eventType === 'off'
+          : lastEvent?.eventType === 'off'
             ? false
             : null;
+      const prevEventAt = lastEvent?.eventAt ?? null;
       const driverId = currentDriverResult[0]?.driverId ?? null;
 
       const positionValues = this.buildPositionValues(
@@ -221,6 +255,7 @@ export class PositionService {
         carId,
         records,
         prevIgnition,
+        prevEventAt,
       );
 
       await this.db.transaction(async (tx) => {
