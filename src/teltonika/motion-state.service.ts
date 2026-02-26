@@ -4,7 +4,7 @@ import { Cache } from 'cache-manager';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
 import { carStopEvents } from '@/shared/database/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { GpsRecord } from './codec8.parser';
 import { MOTION, MotionState } from './motion-state.constants';
 
@@ -29,7 +29,6 @@ export class MotionStateService {
 
     let data: unknown = raw;
 
-    // String bo'lsa parse qil
     if (typeof data === 'string') {
       try {
         data = JSON.parse(data);
@@ -38,7 +37,7 @@ export class MotionStateService {
       }
     }
 
-    // Keyv wrapper: {value: "..."}
+    // Keyv wrapper: {value: ...}
     if (typeof data === 'object' && data !== null && 'value' in data) {
       const inner = (data as { value: unknown }).value;
       if (typeof inner === 'string') {
@@ -77,6 +76,17 @@ export class MotionStateService {
     lat: number,
     lng: number,
   ): Promise<number> {
+    // Xavfsizlik: ochiq eventlarni yopamiz (duplicate oldini olish)
+    const openEvents = await this.db
+      .select({ id: carStopEvents.id, startAt: carStopEvents.startAt })
+      .from(carStopEvents)
+      .where(and(eq(carStopEvents.carId, carId), isNull(carStopEvents.endAt)));
+
+    for (const open of openEvents) {
+      await this.closeEvent(open.id, startAt, open.startAt);
+      this.logger.warn(`Ochiq event yopildi: eventId=${open.id}`);
+    }
+
     const [result] = await this.db
       .insert(carStopEvents)
       .values({ carId, type, startAt, latitude: lat, longitude: lng })
@@ -120,7 +130,6 @@ export class MotionStateService {
     const sinceTime = new Date(state.since);
     const elapsedSeconds = (recordTime.getTime() - sinceTime.getTime()) / 1000;
 
-    // ─── IGNITION OFF → parking candidate yoki parking ───
     if (ignition === false) {
       return this.handleIgnitionOff(
         carId,
@@ -131,7 +140,6 @@ export class MotionStateService {
       );
     }
 
-    // ─── IGNITION ON ───
     const isSlow = speed <= MOTION.SPEED_THRESHOLD;
 
     if (isSlow) {
@@ -174,7 +182,6 @@ export class MotionStateService {
       return state;
     }
 
-    // stopped → parking_candidate (stop eventni yopamiz)
     if (status === 'stopped' && state.eventId) {
       await this.closeEvent(state.eventId, recordTime, new Date(state.since));
     }
