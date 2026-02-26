@@ -24,20 +24,48 @@ export class MotionStateService {
   }
 
   private async getState(carId: number): Promise<MotionState | null> {
-    this.logger.log(`getState: ${this.redisKey(carId)}`);
     const raw: unknown = await this.cache.get(this.redisKey(carId));
-    if (!raw || typeof raw !== 'object') return null;
+    if (!raw) return null;
 
-    if ('status' in raw && 'since' in raw) {
-      return raw as MotionState;
+    let data: unknown = raw;
+
+    // String bo'lsa parse qil
+    if (typeof data === 'string') {
+      try {
+        data = JSON.parse(data);
+      } catch {
+        return null;
+      }
+    }
+
+    // Keyv wrapper: {value: "..."}
+    if (typeof data === 'object' && data !== null && 'value' in data) {
+      const inner = (data as { value: unknown }).value;
+      if (typeof inner === 'string') {
+        try {
+          data = JSON.parse(inner);
+        } catch {
+          return null;
+        }
+      } else {
+        data = inner;
+      }
+    }
+
+    if (
+      typeof data === 'object' &&
+      data !== null &&
+      'status' in data &&
+      'since' in data
+    ) {
+      return data as MotionState;
     }
 
     return null;
   }
 
   private async setState(carId: number, state: MotionState): Promise<void> {
-    // TTL 0 = cheksiz
-    await this.cache.set(this.redisKey(carId), JSON.stringify(state), 0);
+    await this.cache.set(this.redisKey(carId), state, 0);
   }
 
   // ─── DB helpers ───
@@ -81,10 +109,6 @@ export class MotionStateService {
 
   // ─── State Machine ───
 
-  /**
-   * Yangi GPS record asosida qaysi holatga o'tish kerakligini aniqlaydi.
-   * DB ga yozish/yangilash shu yerda bo'ladi.
-   */
   private async transition(
     carId: number,
     state: MotionState,
@@ -126,14 +150,12 @@ export class MotionStateService {
   ): Promise<MotionState> {
     const { status } = state;
 
-    // Agar allaqachon parking yoki parking_candidate bo'lsa
     if (status === 'parking') {
-      return state; // o'zgarish yo'q
+      return state;
     }
 
     if (status === 'parking_candidate') {
       if (elapsedSeconds >= MOTION.PARKING_THRESHOLD) {
-        // ✅ Haqiqiy parking — DB ga yoz
         const eventId = await this.createEvent(
           carId,
           'parking',
@@ -149,16 +171,13 @@ export class MotionStateService {
           eventId,
         };
       }
-      return state; // hali kutmoqda
+      return state;
     }
 
-    // Boshqa holatdan (moving, stop_candidate, stopped) → parking_candidate
-    // Agar ochiq stop event bo'lsa, yopamiz
+    // stopped → parking_candidate (stop eventni yopamiz)
     if (status === 'stopped' && state.eventId) {
       await this.closeEvent(state.eventId, recordTime, new Date(state.since));
     }
-
-    // Agar stop_candidate bo'lsa — bekor, DB ga hech narsa yozilmagan
 
     return {
       status: 'parking_candidate',
@@ -179,12 +198,11 @@ export class MotionStateService {
     const { status } = state;
 
     if (status === 'stopped') {
-      return state; // hali to'xtab turibdi
+      return state;
     }
 
     if (status === 'stop_candidate') {
       if (elapsedSeconds >= MOTION.STOP_THRESHOLD) {
-        // ✅ Haqiqiy stop — DB ga yoz
         const eventId = await this.createEvent(
           carId,
           'stop',
@@ -200,11 +218,9 @@ export class MotionStateService {
           eventId,
         };
       }
-      return state; // hali kutmoqda
+      return state;
     }
 
-    // moving, parking, parking_candidate → stop_candidate
-    // Agar parking bo'lsa va eventId bo'lsa — yopamiz (ignition yondi + sekin)
     if (status === 'parking' && state.eventId) {
       await this.closeEvent(state.eventId, recordTime, new Date(state.since));
     }
@@ -227,15 +243,12 @@ export class MotionStateService {
     const { status } = state;
 
     if (status === 'moving') {
-      return state; // allaqachon harakatda
+      return state;
     }
 
-    // Ochiq eventni yopish kerak
     if ((status === 'stopped' || status === 'parking') && state.eventId) {
       await this.closeEvent(state.eventId, recordTime, new Date(state.since));
     }
-
-    // stop_candidate, parking_candidate → moving (DB ga hech narsa yozilmagan, bekor)
 
     return {
       status: 'moving',
@@ -249,12 +262,8 @@ export class MotionStateService {
   // ─── Public API ───
 
   async processRecords(carId: number, records: GpsRecord[]): Promise<void> {
-    this.logger.log(
-      `processRecords boshlandi: carId=${carId}, records=${records.length}`,
-    );
     let state = await this.getState(carId);
 
-    // Birinchi marta — default holat
     if (!state) {
       const first = records[0];
       state = {
@@ -264,14 +273,19 @@ export class MotionStateService {
         lng: first.lng,
         eventId: null,
       };
+      this.logger.log(`Yangi state: carId=${carId}, status=moving`);
     }
 
-    // Har record uchun state machine ishlatish
     for (const record of records) {
+      const prevStatus = state.status;
       state = await this.transition(carId, state, record);
+      if (state.status !== prevStatus) {
+        this.logger.log(
+          `State o'zgardi: carId=${carId}, ${prevStatus} → ${state.status}`,
+        );
+      }
     }
 
-    // Redis ga saqlash
     await this.setState(carId, state);
   }
 }
