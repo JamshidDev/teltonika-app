@@ -24,6 +24,7 @@ export class MotionStateService {
   }
 
   private async getState(carId: number): Promise<MotionState | null> {
+    this.logger.log(`getState: ${this.redisKey(carId)}`);
     const raw: unknown = await this.cache.get(this.redisKey(carId));
     if (!raw || typeof raw !== 'object') return null;
 
@@ -248,6 +249,9 @@ export class MotionStateService {
   // ─── Public API ───
 
   async processRecords(carId: number, records: GpsRecord[]): Promise<void> {
+    this.logger.log(
+      `processRecords boshlandi: carId=${carId}, records=${records.length}`,
+    );
     let state = await this.getState(carId);
 
     // Birinchi marta — default holat
