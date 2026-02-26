@@ -35,6 +35,7 @@ export class EngineEventsService {
           id: carEngineEvents.id,
           carId: carEngineEvents.carId,
           carName: cars.name,
+          carNumber: cars.carNumber,
           eventType: carEngineEvents.eventType,
           eventAt: carEngineEvents.eventAt,
           latitude: carEngineEvents.latitude,
