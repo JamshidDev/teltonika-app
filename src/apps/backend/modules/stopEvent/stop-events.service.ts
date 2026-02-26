@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
 import { cars, carStopEvents } from '@/shared/database/schema';
-import { and, count, desc, eq, gte, lte, type SQL } from 'drizzle-orm';
+import { and, count, desc, eq, gte, lte, sql, type SQL } from 'drizzle-orm';
 import { StopEventsQueryDto } from './stop-events.dto';
 
 @Injectable()
@@ -46,7 +46,11 @@ export class StopEventsService {
         .from(carStopEvents)
         .leftJoin(cars, eq(carStopEvents.carId, cars.id))
         .where(whereClause)
-        .orderBy(desc(carStopEvents.startAt))
+        .orderBy(
+          sql`${carStopEvents.endAt}
+          IS NOT NULL`,
+          desc(carStopEvents.startAt),
+        )
         .offset(offset)
         .limit(pageSize),
 
