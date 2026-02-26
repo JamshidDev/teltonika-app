@@ -3,10 +3,11 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
-import { carStopEvents } from '@/shared/database/schema';
+import { cars, carStopEvents } from '@/shared/database/schema';
 import { and, eq, isNull } from 'drizzle-orm';
 import { GpsRecord } from './codec8.parser';
 import { MOTION, MotionState } from './motion-state.constants';
+import { TrackingGateway } from '@/shared/gateway/tracking.gateway';
 
 @Injectable()
 export class MotionStateService {
@@ -15,6 +16,7 @@ export class MotionStateService {
   constructor(
     @Inject(CACHE_MANAGER) private cache: Cache,
     @InjectDb() private db: DataSource,
+    private readonly trackingGateway: TrackingGateway,
   ) {}
 
   // ─── Helpers ───
@@ -88,6 +90,15 @@ export class MotionStateService {
 
   // ─── DB ───
 
+  private async getCarInfo(carId: number) {
+    const result = await this.db
+      .select({ name: cars.name, carNumber: cars.carNumber })
+      .from(cars)
+      .where(eq(cars.id, carId))
+      .limit(1);
+    return result[0] ?? null;
+  }
+
   private async createEvent(
     carId: number,
     type: 'stop' | 'parking',
@@ -137,12 +148,6 @@ export class MotionStateService {
 
   // ─── State Machine ───
 
-  /**
-   * Mashina harakatdami yoki to'xtab turibdimi aniqlash:
-   * - speed > SPEED_THRESHOLD (10 km/h) → harakatda
-   * - YOKI state.lat/lng dan 50m+ uzoqlashgan → harakatda
-   * - Aks holda → to'xtab turibdi
-   */
   private isMoving(state: MotionState, record: GpsRecord): boolean {
     const speed = record.speed ?? 0;
 
@@ -170,7 +175,6 @@ export class MotionStateService {
     const sinceTime = new Date(state.since);
     const elapsedSeconds = (recordTime.getTime() - sinceTime.getTime()) / 1000;
 
-    // ─── IGNITION OFF → parking candidate yoki parking ───
     if (ignition === false) {
       return this.handleIgnitionOff(
         carId,
@@ -181,7 +185,6 @@ export class MotionStateService {
       );
     }
 
-    // ─── IGNITION ON ───
     const moving = this.isMoving(state, record);
 
     if (!moving) {
@@ -308,6 +311,23 @@ export class MotionStateService {
     };
   }
 
+  // ─── Socket emit ───
+
+  private async emitMotionState(carId: number, state: MotionState) {
+    const car = await this.getCarInfo(carId);
+    if (!car) return;
+
+    this.trackingGateway.emitCarMotion({
+      carId,
+      carName: car.name,
+      carNumber: car.carNumber,
+      status: state.status,
+      since: state.since,
+      lat: state.lat,
+      lng: state.lng,
+    });
+  }
+
   // ─── Public API ───
 
   async processRecords(carId: number, records: GpsRecord[]): Promise<void> {
@@ -325,10 +345,13 @@ export class MotionStateService {
       this.logger.log(`Yangi state: carId=${carId}, status=moving`);
     }
 
+    let stateChanged = false;
+
     for (const record of records) {
       const prevStatus = state.status;
       state = await this.transition(carId, state, record);
       if (state.status !== prevStatus) {
+        stateChanged = true;
         this.logger.log(
           `State o'zgardi: carId=${carId}, ${prevStatus} → ${state.status}`,
         );
@@ -336,5 +359,10 @@ export class MotionStateService {
     }
 
     await this.setState(carId, state);
+
+    // State o'zgarganda socket emit
+    if (stateChanged) {
+      await this.emitMotionState(carId, state);
+    }
   }
 }

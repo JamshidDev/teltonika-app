@@ -51,4 +51,19 @@ export class TrackingGateway
     this.logger.log(`Emit car:location carId: ${data.carId}`);
     this.server.to('tracking').emit('car:location', data);
   }
+
+  emitCarMotion(data: {
+    carId: number;
+    carName: string;
+    carNumber: string | null;
+    status: string;
+    since: string;
+    lat: number;
+    lng: number;
+  }) {
+    this.logger.log(
+      `Emit car:motion carId: ${data.carId}, status: ${data.status}`,
+    );
+    this.server.to('tracking').emit('car:motion', data);
+  }
 }
