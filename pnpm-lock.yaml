@@ -111,9 +111,6 @@ importers:
       '@types/jest':
         specifier: ^30.0.0
         version: 30.0.0
-      '@types/keyv__redis':
-        specifier: ^2.3.0
-        version: 2.3.0(keyv@5.6.0)
       '@types/node':
         specifier: ^22.10.7
         version: 22.19.11
@@ -1367,10 +1364,6 @@ packages:
 
   '@types/jsonwebtoken@9.0.10':
     resolution: {integrity: sha512-asx5hIG9Qmf/1oStypjanR7iKTv0gXQ1Ov/jfrX6kS/EO0OFni8orbmGCn0672NHR3kXHwpAwR+B368ZGN/2rA==}
-
-  '@types/keyv__redis@2.3.0':
-    resolution: {integrity: sha512-PVX/y1vTstS/SLhlqEQcxTsC3Wy7wWVnuBZ0KT6G2VPksFpLqemO5ZzFDoWvH/EhitoqGaXuK28Gfw1RTpVCEQ==}
-    deprecated: This is a stub types definition. @keyv/redis provides its own type definitions, so you do not need this installed.
 
   '@types/methods@1.1.4':
     resolution: {integrity: sha512-ymXWVrDiCxTBE3+RIrrP533E70eA+9qu7zdWoHuOmGujkYtzf4HQF96b8nwHLqhuf4ykX61IGRIB38CC6/sImQ==}
@@ -5180,13 +5173,6 @@ snapshots:
     dependencies:
       '@types/ms': 2.1.0
       '@types/node': 22.19.11
-
-  '@types/keyv__redis@2.3.0(keyv@5.6.0)':
-    dependencies:
-      '@keyv/redis': 5.1.6(keyv@5.6.0)
-    transitivePeerDependencies:
-      - '@node-rs/xxhash'
-      - keyv
 
   '@types/methods@1.1.4': {}
 
