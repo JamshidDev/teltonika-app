@@ -17,11 +17,31 @@ export class MotionStateService {
     @InjectDb() private db: DataSource,
   ) {}
 
-  // ─── Redis helpers ───
+  // ─── Helpers ───
 
   private redisKey(carId: number): string {
     return `${MOTION.REDIS_PREFIX}:${carId}`;
   }
+
+  private calculateDistance(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+  ): number {
+    const R = 6371000;
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLng = ((lng2 - lng1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  // ─── Redis ───
 
   private async getState(carId: number): Promise<MotionState | null> {
     const raw: unknown = await this.cache.get(this.redisKey(carId));
@@ -37,7 +57,6 @@ export class MotionStateService {
       }
     }
 
-    // Keyv wrapper: {value: ...}
     if (typeof data === 'object' && data !== null && 'value' in data) {
       const inner = (data as { value: unknown }).value;
       if (typeof inner === 'string') {
@@ -67,7 +86,7 @@ export class MotionStateService {
     await this.cache.set(this.redisKey(carId), state, 0);
   }
 
-  // ─── DB helpers ───
+  // ─── DB ───
 
   private async createEvent(
     carId: number,
@@ -76,7 +95,6 @@ export class MotionStateService {
     lat: number,
     lng: number,
   ): Promise<number> {
-    // Xavfsizlik: ochiq eventlarni yopamiz (duplicate oldini olish)
     const openEvents = await this.db
       .select({ id: carStopEvents.id, startAt: carStopEvents.startAt })
       .from(carStopEvents)
@@ -119,17 +137,40 @@ export class MotionStateService {
 
   // ─── State Machine ───
 
+  /**
+   * Mashina harakatdami yoki to'xtab turibdimi aniqlash:
+   * - speed > SPEED_THRESHOLD (10 km/h) → harakatda
+   * - YOKI state.lat/lng dan 50m+ uzoqlashgan → harakatda
+   * - Aks holda → to'xtab turibdi
+   */
+  private isMoving(state: MotionState, record: GpsRecord): boolean {
+    const speed = record.speed ?? 0;
+
+    if (speed > MOTION.SPEED_THRESHOLD) return true;
+
+    const distance = this.calculateDistance(
+      state.lat,
+      state.lng,
+      record.lat,
+      record.lng,
+    );
+
+    if (distance > MOTION.DISTANCE_THRESHOLD) return true;
+
+    return false;
+  }
+
   private async transition(
     carId: number,
     state: MotionState,
     record: GpsRecord,
   ): Promise<MotionState> {
-    const speed = record.speed ?? 0;
     const ignition = record.io.ignition;
     const recordTime = new Date(record.timestamp);
     const sinceTime = new Date(state.since);
     const elapsedSeconds = (recordTime.getTime() - sinceTime.getTime()) / 1000;
 
+    // ─── IGNITION OFF → parking candidate yoki parking ───
     if (ignition === false) {
       return this.handleIgnitionOff(
         carId,
@@ -140,9 +181,10 @@ export class MotionStateService {
       );
     }
 
-    const isSlow = speed <= MOTION.SPEED_THRESHOLD;
+    // ─── IGNITION ON ───
+    const moving = this.isMoving(state, record);
 
-    if (isSlow) {
+    if (!moving) {
       return this.handleSlow(carId, state, record, recordTime, elapsedSeconds);
     } else {
       return this.handleMoving(carId, state, record, recordTime);

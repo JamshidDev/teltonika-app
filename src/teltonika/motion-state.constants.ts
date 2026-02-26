@@ -1,5 +1,6 @@
 export const MOTION = {
-  SPEED_THRESHOLD: 3, // km/h — bundan past = to'xtagan
+  SPEED_THRESHOLD: 10, // km/h — bundan past = to'xtagan
+  DISTANCE_THRESHOLD: 50, // metr — bundan kam siljish = jitter
   STOP_THRESHOLD: 120, // sekund — stop candidate → stopped
   PARKING_THRESHOLD: 180, // sekund — parking candidate → parking
   REDIS_PREFIX: 'motion', // Redis key: motion:{carId}
@@ -14,8 +15,8 @@ export type MotionStatus =
 
 export interface MotionState {
   status: MotionStatus;
-  since: string; // ISO date — candidate/event boshlangan vaqt
+  since: string;
   lat: number;
   lng: number;
-  eventId: number | null; // DB ga yozilgan event ID (stopped/parking uchun)
+  eventId: number | null;
 }
