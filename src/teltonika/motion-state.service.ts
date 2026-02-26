@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
+import { Cron } from '@nestjs/schedule';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
 import { cars, carStopEvents } from '@/shared/database/schema';
@@ -8,6 +9,8 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { GpsRecord } from './codec8.parser';
 import { MOTION, MotionState } from './motion-state.constants';
 import { TrackingGateway } from '@/shared/gateway/tracking.gateway';
+
+const ACTIVE_CARS_KEY = 'motion:active';
 
 @Injectable()
 export class MotionStateService {
@@ -86,6 +89,50 @@ export class MotionStateService {
 
   private async setState(carId: number, state: MotionState): Promise<void> {
     await this.cache.set(this.redisKey(carId), state, 0);
+  }
+
+  // ─── Active cars list ───
+
+  private async getActiveCars(): Promise<number[]> {
+    const raw: unknown = await this.cache.get(ACTIVE_CARS_KEY);
+    if (!raw) return [];
+
+    let data: unknown = raw;
+
+    if (typeof data === 'string') {
+      try {
+        data = JSON.parse(data);
+      } catch {
+        return [];
+      }
+    }
+
+    if (typeof data === 'object' && data !== null && 'value' in data) {
+      const inner = (data as { value: unknown }).value;
+      if (typeof inner === 'string') {
+        try {
+          data = JSON.parse(inner);
+        } catch {
+          return [];
+        }
+      } else {
+        data = inner;
+      }
+    }
+
+    if (Array.isArray(data)) {
+      return data as number[];
+    }
+
+    return [];
+  }
+
+  private async addActiveCar(carId: number): Promise<void> {
+    const activeCars = await this.getActiveCars();
+    if (!activeCars.includes(carId)) {
+      activeCars.push(carId);
+      await this.cache.set(ACTIVE_CARS_KEY, activeCars, 0);
+    }
   }
 
   // ─── DB ───
@@ -328,9 +375,82 @@ export class MotionStateService {
     });
   }
 
+  // ─── Cron: candidate timeout tekshirish ───
+
+  @Cron('*/60 * * * * *')
+  async checkCandidateTimeouts(): Promise<void> {
+    const activeCars = await this.getActiveCars();
+    if (activeCars.length === 0) return;
+
+    const now = Date.now();
+
+    for (const carId of activeCars) {
+      try {
+        const state = await this.getState(carId);
+        if (!state) continue;
+
+        const elapsedSeconds = (now - new Date(state.since).getTime()) / 1000;
+        let newState: MotionState | null = null;
+
+        if (
+          state.status === 'parking_candidate' &&
+          elapsedSeconds >= MOTION.PARKING_THRESHOLD
+        ) {
+          const eventId = await this.createEvent(
+            carId,
+            'parking',
+            new Date(state.since),
+            state.lat,
+            state.lng,
+          );
+          newState = {
+            status: 'parking',
+            since: state.since,
+            lat: state.lat,
+            lng: state.lng,
+            eventId,
+          };
+        }
+
+        if (
+          state.status === 'stop_candidate' &&
+          elapsedSeconds >= MOTION.STOP_THRESHOLD
+        ) {
+          const eventId = await this.createEvent(
+            carId,
+            'stop',
+            new Date(state.since),
+            state.lat,
+            state.lng,
+          );
+          newState = {
+            status: 'stopped',
+            since: state.since,
+            lat: state.lat,
+            lng: state.lng,
+            eventId,
+          };
+        }
+
+        if (newState) {
+          await this.setState(carId, newState);
+          await this.emitMotionState(carId, newState);
+          this.logger.log(
+            `Cron: carId=${carId}, ${state.status} → ${newState.status}`,
+          );
+        }
+      } catch (error) {
+        this.logger.error(`Cron xato: carId=${carId}`, error);
+      }
+    }
+  }
+
   // ─── Public API ───
 
   async processRecords(carId: number, records: GpsRecord[]): Promise<void> {
+    // Active car listga qo'shish
+    await this.addActiveCar(carId);
+
     let state = await this.getState(carId);
 
     if (!state) {
@@ -360,7 +480,6 @@ export class MotionStateService {
 
     await this.setState(carId, state);
 
-    // State o'zgarganda socket emit
     if (stateChanged) {
       await this.emitMotionState(carId, state);
     }

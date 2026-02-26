@@ -18,9 +18,11 @@ import { DriverModule } from '@/apps/backend/modules/driver/driver.module';
 import { DeviceModule } from '@/apps/backend/modules/device/device.module';
 import { StopEventsModule } from '@/apps/backend/modules/stopEvent/stop-events.module';
 import { EngineEventsModule } from '@/apps/backend/modules/engineEvent/engine-event.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     ConfigModule,
     TeltonikaModule,
     DatabaseModule,
