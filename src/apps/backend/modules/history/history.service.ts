@@ -162,9 +162,9 @@ export class HistoryService {
     return points.filter((p) => simplifiedCoords.has(`${p.lat},${p.lng}`));
   }
 
-  async getCarRouteWithEvents(carId: number, date: string) {
-    const dayStart = new Date(`${date}T00:00:00`);
-    const dayEnd = new Date(`${date}T23:59:59`);
+  async getCarRouteWithEvents(carId: number, from: string, to: string) {
+    const dayStart = new Date(from);
+    const dayEnd = new Date(to);
 
     // 1. Stop/parking eventlar
     const events = await this.db
@@ -236,7 +236,8 @@ export class HistoryService {
 
     return {
       carId,
-      date,
+      from,
+      to,
       totalEvents: events.length,
       totalRoutePoints: routePoints.length,
       timeline,

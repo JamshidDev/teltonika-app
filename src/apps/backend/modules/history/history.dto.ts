@@ -1,5 +1,11 @@
 import { PaginationDto } from '@/shared/dto/common.dto';
-import { IsDateString, IsInt, IsNumber, IsOptional, IsString } from 'class-validator';
+import {
+  IsDateString,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -30,6 +36,11 @@ export class CarRouteWithEventsDto {
   @IsInt()
   carId: number;
 
-  @IsString()
-  date: string; // '2026-02-27'
+  @ApiProperty({ example: '2026-02-22T00:00:00Z' })
+  @IsDateString()
+  from: string;
+
+  @ApiProperty({ example: '2026-02-22T23:59:59Z' })
+  @IsDateString()
+  to: string;
 }
