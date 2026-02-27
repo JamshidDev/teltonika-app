@@ -28,8 +28,8 @@ export const carLastPositions = pgTable(
     gsmSignal: integer('gsm_signal'),
     batteryVoltage: integer('battery_voltage'),
     extVoltage: integer('ext_voltage'),
-    recordedAt: timestamp('recorded_at').notNull(),
-    updatedAt: timestamp('updated_at').defaultNow(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
   },
   (table) => ({
     ignitionIdx: index('idx_last_pos_ignition').on(table.ignition),

@@ -17,9 +17,9 @@ export const cars = pgTable(
       .notNull(),
     name: varchar('name', { length: 100 }).notNull(),
     carNumber: varchar('car_number', { length: 20 }).unique(),
-    createdAt: timestamp('created_at').defaultNow(),
-    updatedAt: timestamp('updated_at').defaultNow(),
-    deletedAt: timestamp('deleted_at'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (table) => ({
     deletedAtIdx: index('idx_cars_deleted_at').on(table.deletedAt),

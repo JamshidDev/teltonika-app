@@ -13,9 +13,9 @@ export const drivers = pgTable(
     fullName: varchar('full_name', { length: 100 }).notNull(),
     phone: varchar('phone', { length: 20 }),
     licenseNumber: varchar('license_number', { length: 50 }),
-    createdAt: timestamp('created_at').defaultNow(),
-    updatedAt: timestamp('updated_at').defaultNow(),
-    deletedAt: timestamp('deleted_at'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (table) => ({
     phoneIdx: index('idx_drivers_phone').on(table.phone),

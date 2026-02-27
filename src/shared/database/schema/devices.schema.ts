@@ -13,9 +13,9 @@ export const devices = pgTable(
     id: bigserial('id', { mode: 'number' }).primaryKey(),
     imei: varchar('imei', { length: 20 }).unique().notNull(),
     model: varchar('model', { length: 50 }),
-    createdAt: timestamp('created_at').defaultNow(),
-    updatedAt: timestamp('updated_at').defaultNow(),
-    deletedAt: timestamp('deleted_at'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (table) => ({
     imeiIdx: index('idx_devices_imei').on(table.imei),

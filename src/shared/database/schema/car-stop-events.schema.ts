@@ -15,8 +15,8 @@ export const carStopEvents = pgTable('car_stop_events', {
     .references(() => cars.id)
     .notNull(),
   type: varchar('type', { length: 10 }).notNull(), // 'stop' | 'parking'
-  startAt: timestamp('start_at').notNull(),
-  endAt: timestamp('end_at'),
+  startAt: timestamp('start_at', { withTimezone: true }).notNull(),
+  endAt: timestamp('end_at', { withTimezone: true }),
   durationSeconds: integer('duration_seconds'),
   latitude: doublePrecision('latitude'),
   longitude: doublePrecision('longitude'),

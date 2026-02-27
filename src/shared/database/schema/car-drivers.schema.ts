@@ -19,8 +19,8 @@ export const carDrivers = pgTable(
     driverId: bigint('driver_id', { mode: 'number' })
       .references(() => drivers.id)
       .notNull(),
-    startAt: timestamp('start_at').defaultNow().notNull(),
-    endAt: timestamp('end_at'),
+    startAt: timestamp('start_at', { withTimezone: true }).defaultNow().notNull(),
+    endAt: timestamp('end_at', { withTimezone: true }),
   },
   (table) => ({
     carIdx: index('idx_car_drivers_car_id').on(table.carId),

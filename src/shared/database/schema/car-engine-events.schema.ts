@@ -14,7 +14,7 @@ export const carEngineEvents = pgTable('car_engine_events', {
     .references(() => cars.id)
     .notNull(),
   eventType: varchar('event_type', { length: 8 }).notNull(), // 'on' / 'off'
-  eventAt: timestamp('event_at').notNull(),
+  eventAt: timestamp('event_at', { withTimezone: true }).notNull(),
   latitude: doublePrecision('latitude'),
   longitude: doublePrecision('longitude'),
 });

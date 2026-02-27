@@ -35,8 +35,8 @@ export const carPositions = pgTable(
     satellites: integer('satellites'),
     ignition: boolean('ignition'),
     rawIo: jsonb('raw_io'),
-    recordedAt: timestamp('recorded_at').notNull(),
-    createdAt: timestamp('created_at').defaultNow(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   },
   (table) => ({
     carTimeIdx: index('idx_positions_car_recorded').on(
