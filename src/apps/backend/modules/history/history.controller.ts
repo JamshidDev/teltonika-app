@@ -25,7 +25,11 @@ export class HistoryController {
 
   @Get('route-with-events')
   async getRouteWithEvents(@Query() dto: CarRouteWithEventsDto) {
-    return this.historyService.getCarRouteWithEvents(dto.carId, dto.date);
+    return this.historyService.getCarRouteWithEvents(
+      dto.carId,
+      dto.from,
+      dto.to,
+    );
   }
 
   @Get('route/geojson')
