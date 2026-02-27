@@ -1,6 +1,6 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { HistoryService } from './history.service';
-import { CarHistoryDto, CarRouteDto } from './history.dto';
+import { CarHistoryDto, CarRouteDto, CarRouteWithEventsDto } from './history.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 @ApiBearerAuth()
@@ -17,6 +17,11 @@ export class HistoryController {
   @Get('route')
   getCarRoute(@Query() dto: CarRouteDto) {
     return this.historyService.getCarRoute(dto);
+  }
+
+  @Get('route-with-events')
+  async getRouteWithEvents(@Query() dto: CarRouteWithEventsDto) {
+    return this.historyService.getCarRouteWithEvents(dto.carId, dto.date);
   }
 
   @Get('route/geojson')
