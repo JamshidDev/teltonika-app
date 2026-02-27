@@ -1,6 +1,10 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { HistoryService } from './history.service';
-import { CarHistoryDto, CarRouteDto, CarRouteWithEventsDto } from './history.dto';
+import {
+  CarHistoryDto,
+  CarRouteDto,
+  CarRouteWithEventsDto,
+} from './history.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 @ApiBearerAuth()
