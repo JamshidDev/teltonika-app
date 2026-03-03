@@ -25,7 +25,7 @@ export class TrackingGateway
   }
 
   handleDisconnect(client: Socket) {
-    this.logger.log(`Client uzildi: ${client.id}`);
+    this.logger.warn(`Client uzildi: ${client.id}`);
   }
 
   @SubscribeMessage('track:subscribe')
@@ -38,6 +38,10 @@ export class TrackingGateway
   handleUnsubscribe(client: Socket) {
     void client.leave('tracking');
   }
+
+
+
+
 
   emitCarLocation(data: {
     carId: number;

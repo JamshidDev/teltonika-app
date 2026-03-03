@@ -48,7 +48,7 @@ export class MotionStateService {
 
   // ─── Redis ───
 
-  private async getState(carId: number): Promise<MotionState | null> {
+  async getState(carId: number): Promise<MotionState | null> {
     const raw: unknown = await this.cache.get(this.redisKey(carId));
     if (!raw) return null;
 

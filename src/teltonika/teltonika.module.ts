@@ -17,5 +17,6 @@ import { MotionStateService } from '@/teltonika/motion-state.service';
     PositionProcessor,
     MotionStateService,
   ],
+  exports: [MotionStateService,]
 })
 export class TeltonikaModule {}
