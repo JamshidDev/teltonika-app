@@ -250,12 +250,35 @@ export class MotionStateService {
   ): Promise<MotionState> {
     const { status } = state;
 
+    // Parking da — hech narsa qilma
     if (status === 'parking') {
       return state;
     }
 
+    // Parking candidate — vaqt yetdimi tekshir
     if (status === 'parking_candidate') {
       if (elapsedSeconds >= MOTION.PARKING_THRESHOLD) {
+        // Agar oldingi stop event bor → parking ga upgrade
+        if (state.eventId) {
+          await this.db
+            .update(carStopEvents)
+            .set({ type: 'parking' })
+            .where(eq(carStopEvents.id, state.eventId));
+
+          this.logger.log(
+            `Stop → Parking upgrade: carId=${carId}, eventId=${state.eventId}`,
+          );
+
+          return {
+            status: 'parking',
+            since: state.since,
+            lat: state.lat,
+            lng: state.lng,
+            eventId: state.eventId,
+          };
+        }
+
+        // Yangi parking event
         const eventId = await this.createEvent(
           carId,
           'parking',
@@ -274,15 +297,23 @@ export class MotionStateService {
       return state;
     }
 
-    if (status === 'stopped' && state.eventId) {
-      await this.closeEvent(state.eventId, recordTime, new Date(state.since));
+    // ✅ Stopped da ignition off → eventni YOPMA, parking_candidate ga o'tkazish
+    if (status === 'stopped') {
+      return {
+        status: 'parking_candidate',
+        since: state.since, // eski since saqlanadi
+        lat: state.lat, // eski koordinata
+        lng: state.lng,
+        eventId: state.eventId, // ✅ event yopilmaydi, saqlanadi
+      };
     }
 
+    // Moving yoki stop_candidate → parking_candidate
     return {
       status: 'parking_candidate',
       since: recordTime.toISOString(),
-      lat: record.lat,
-      lng: record.lng,
+      lat: state.lat, // ✅ oldingi koordinata (GPS jitter emas)
+      lng: state.lng,
       eventId: null,
     };
   }
@@ -296,7 +327,8 @@ export class MotionStateService {
   ): Promise<MotionState> {
     const { status } = state;
 
-    if (status === 'stopped') {
+    // ✅ parking VA stopped da — hech narsa qilma, davom etsin
+    if (status === 'stopped' || status === 'parking') {
       return state;
     }
 
@@ -320,8 +352,9 @@ export class MotionStateService {
       return state;
     }
 
-    if (status === 'parking' && state.eventId) {
-      await this.closeEvent(state.eventId, recordTime, new Date(state.since));
+    // parking_candidate da speed past → davom etsin
+    if (status === 'parking_candidate') {
+      return state;
     }
 
     return {
@@ -345,8 +378,33 @@ export class MotionStateService {
       return state;
     }
 
-    if ((status === 'stopped' || status === 'parking') && state.eventId) {
-      await this.closeEvent(state.eventId, recordTime, new Date(state.since));
+    // ✅ Grace period: parking/stopped dan chiqishda tekshirish
+    if (status === 'parking' || status === 'stopped') {
+      const speed = record.speed ?? 0;
+      const distance = this.calculateDistance(
+        state.lat,
+        state.lng,
+        record.lat,
+        record.lng,
+      );
+
+      // Speed < 20 va distance < 100m → jitter, davom etsin
+      if (speed < 20 && distance < 100) {
+        return state;
+      }
+
+      // Haqiqiy harakat — event yopiladi
+      if (state.eventId) {
+        await this.closeEvent(state.eventId, recordTime, new Date(state.since));
+      }
+    }
+
+    // parking_candidate / stop_candidate dan chiqish
+    if (status === 'parking_candidate' || status === 'stop_candidate') {
+      // Agar oldingi event bor va yopilmagan → yopish
+      if (state.eventId) {
+        await this.closeEvent(state.eventId, recordTime, new Date(state.since));
+      }
     }
 
     return {
@@ -396,20 +454,40 @@ export class MotionStateService {
           state.status === 'parking_candidate' &&
           elapsedSeconds >= MOTION.PARKING_THRESHOLD
         ) {
-          const eventId = await this.createEvent(
-            carId,
-            'parking',
-            new Date(state.since),
-            state.lat,
-            state.lng,
-          );
-          newState = {
-            status: 'parking',
-            since: state.since,
-            lat: state.lat,
-            lng: state.lng,
-            eventId,
-          };
+          if (state.eventId) {
+            // Stop → Parking upgrade
+            await this.db
+              .update(carStopEvents)
+              .set({ type: 'parking' })
+              .where(eq(carStopEvents.id, state.eventId));
+
+            this.logger.log(
+              `Cron: Stop → Parking upgrade: carId=${carId}, eventId=${state.eventId}`,
+            );
+
+            newState = {
+              status: 'parking',
+              since: state.since,
+              lat: state.lat,
+              lng: state.lng,
+              eventId: state.eventId,
+            };
+          } else {
+            const eventId = await this.createEvent(
+              carId,
+              'parking',
+              new Date(state.since),
+              state.lat,
+              state.lng,
+            );
+            newState = {
+              status: 'parking',
+              since: state.since,
+              lat: state.lat,
+              lng: state.lng,
+              eventId,
+            };
+          }
         }
 
         if (
