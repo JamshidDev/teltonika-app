@@ -87,7 +87,7 @@ export class HistoryService {
         .leftJoin(devices, eq(carPositions.deviceId, devices.id))
         .leftJoin(drivers, eq(carPositions.driverId, drivers.id))
         .where(whereClause)
-        .orderBy(desc(carPositions.createdAt))
+        .orderBy(desc(carPositions.recordedAt))
         .offset(offset)
         .limit(pageSize),
 
