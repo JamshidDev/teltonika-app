@@ -231,8 +231,10 @@ export class HistoryService {
 
     const routePoints = routeResult.rows as unknown as RoutePoint[];
 
+    const clippedEvents = this.clipEventsToRange(events, dayStart, dayEnd);
+
     // 3. Timeline yaratish
-    const timeline = this.buildTimeline(routePoints, events);
+    const timeline = this.buildTimeline(routePoints, clippedEvents);
 
     return {
       carId,
@@ -325,6 +327,39 @@ export class HistoryService {
     }
 
     return timeline;
+  }
+
+  private clipEventsToRange(
+    events: {
+      type: string | null;
+      startAt: Date;
+      endAt: Date | null;
+      durationSeconds: number | null;
+      lat: number | null;
+      lng: number | null;
+    }[],
+    rangeStart: Date,
+    rangeEnd: Date,
+  ) {
+    return events.map((e) => {
+      const clippedStart = e.startAt < rangeStart ? rangeStart : e.startAt;
+      const clippedEnd = e.endAt
+        ? e.endAt > rangeEnd
+          ? rangeEnd
+          : e.endAt
+        : null;
+
+      const duration = clippedEnd
+        ? Math.floor((clippedEnd.getTime() - clippedStart.getTime()) / 1000)
+        : null;
+
+      return {
+        ...e,
+        startAt: clippedStart,
+        endAt: clippedEnd,
+        durationSeconds: duration,
+      };
+    });
   }
 
   private simplifyRoute(points: RoutePoint[]): RoutePoint[] {
