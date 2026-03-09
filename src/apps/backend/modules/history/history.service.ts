@@ -25,6 +25,7 @@ interface RoutePoint {
 interface TimelineRoute {
   type: 'route';
   points: RoutePoint[];
+  distance: number; // total distance in km
 }
 
 interface TimelineEvent {
@@ -287,6 +288,7 @@ export class HistoryService {
         timeline.push({
           type: 'route',
           points: this.simplifyRoute(segment),
+          distance: this.calculateSegmentDistanceKm(segment),
         });
       }
 
@@ -323,6 +325,7 @@ export class HistoryService {
       timeline.push({
         type: 'route',
         points: this.simplifyRoute(remaining),
+        distance: this.calculateSegmentDistanceKm(remaining),
       });
     }
 
@@ -360,6 +363,37 @@ export class HistoryService {
         durationSeconds: duration,
       };
     });
+  }
+
+  private calculateDistance(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+  ): number {
+    const R = 6371000; // Earth radius in meters
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLng = ((lng2 - lng1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  private calculateSegmentDistanceKm(points: RoutePoint[]): number {
+    if (points.length < 2) return 0;
+    let totalMeters = 0;
+    for (let i = 1; i < points.length; i++) {
+      totalMeters += this.calculateDistance(
+        points[i - 1]!.lat,
+        points[i - 1]!.lng,
+        points[i]!.lat,
+        points[i]!.lng,
+      );
+    }
+    return Math.round((totalMeters / 1000) * 10) / 10; // km, 1 decimal place
   }
 
   private simplifyRoute(points: RoutePoint[]): RoutePoint[] {
