@@ -19,4 +19,5 @@ export interface MotionState {
   lat: number;
   lng: number;
   eventId: number | null;
+  movementStartedAt: string | null;
 }

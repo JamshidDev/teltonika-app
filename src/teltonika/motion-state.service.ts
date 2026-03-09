@@ -275,6 +275,7 @@ export class MotionStateService {
             lat: state.lat,
             lng: state.lng,
             eventId: state.eventId,
+            movementStartedAt: null,
           };
         }
 
@@ -292,6 +293,7 @@ export class MotionStateService {
           lat: state.lat,
           lng: state.lng,
           eventId,
+          movementStartedAt: null,
         };
       }
       return state;
@@ -301,10 +303,11 @@ export class MotionStateService {
     if (status === 'stopped') {
       return {
         status: 'parking_candidate',
-        since: state.since, // eski since saqlanadi
-        lat: state.lat, // eski koordinata
+        since: state.since,
+        lat: state.lat,
         lng: state.lng,
-        eventId: state.eventId, // ✅ event yopilmaydi, saqlanadi
+        eventId: state.eventId,
+        movementStartedAt: null,
       };
     }
 
@@ -312,9 +315,10 @@ export class MotionStateService {
     return {
       status: 'parking_candidate',
       since: recordTime.toISOString(),
-      lat: state.lat, // ✅ oldingi koordinata (GPS jitter emas)
+      lat: state.lat,
       lng: state.lng,
       eventId: null,
+      movementStartedAt: null,
     };
   }
 
@@ -347,6 +351,7 @@ export class MotionStateService {
           lat: state.lat,
           lng: state.lng,
           eventId,
+          movementStartedAt: null,
         };
       }
       return state;
@@ -363,6 +368,7 @@ export class MotionStateService {
       lat: record.lat,
       lng: record.lng,
       eventId: null,
+      movementStartedAt: null,
     };
   }
 
@@ -378,7 +384,6 @@ export class MotionStateService {
       return state;
     }
 
-    // ✅ Grace period: parking/stopped dan chiqishda tekshirish
     if (status === 'parking' || status === 'stopped') {
       const speed = record.speed ?? 0;
       const distance = this.calculateDistance(
@@ -388,14 +393,21 @@ export class MotionStateService {
         record.lng,
       );
 
-      // Speed < 20 va distance < 100m → jitter, davom etsin
       if (speed < 20 && distance < 100) {
+        if (speed === 0) {
+          return { ...state, movementStartedAt: null };
+        }
+        if (!state.movementStartedAt) {
+          return { ...state, movementStartedAt: recordTime.toISOString() };
+        }
         return state;
       }
 
-      // Haqiqiy harakat — event yopiladi
       if (state.eventId) {
-        await this.closeEvent(state.eventId, recordTime, new Date(state.since));
+        const closeAt = state.movementStartedAt
+          ? new Date(state.movementStartedAt)
+          : recordTime;
+        await this.closeEvent(state.eventId, closeAt, new Date(state.since));
       }
     }
 
@@ -413,6 +425,7 @@ export class MotionStateService {
       lat: record.lat,
       lng: record.lng,
       eventId: null,
+      movementStartedAt: null,
     };
   }
 
@@ -471,6 +484,7 @@ export class MotionStateService {
               lat: state.lat,
               lng: state.lng,
               eventId: state.eventId,
+              movementStartedAt: null,
             };
           } else {
             const eventId = await this.createEvent(
@@ -486,6 +500,7 @@ export class MotionStateService {
               lat: state.lat,
               lng: state.lng,
               eventId,
+              movementStartedAt: null,
             };
           }
         }
@@ -507,6 +522,7 @@ export class MotionStateService {
             lat: state.lat,
             lng: state.lng,
             eventId,
+            movementStartedAt: null,
           };
         }
 
@@ -539,6 +555,7 @@ export class MotionStateService {
         lat: first.lat,
         lng: first.lng,
         eventId: null,
+        movementStartedAt: null,
       };
       this.logger.log(`Yangi state: carId=${carId}, status=moving`);
     }
@@ -547,7 +564,7 @@ export class MotionStateService {
 
     for (const record of records) {
       const prevStatus = state.status;
-      state = await this.transition(carId, state, record);
+      state = await this.transition(carId, state!, record);
       if (state.status !== prevStatus) {
         stateChanged = true;
         this.logger.log(
@@ -556,10 +573,10 @@ export class MotionStateService {
       }
     }
 
-    await this.setState(carId, state);
+    await this.setState(carId, state!);
 
     if (stateChanged) {
-      await this.emitMotionState(carId, state);
+      await this.emitMotionState(carId, state!);
     }
   }
 }
