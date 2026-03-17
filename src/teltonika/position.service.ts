@@ -13,6 +13,7 @@ import {
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { GpsRecord } from './codec8.parser';
 import { RouteConfig } from '@config/route.config';
+import { MOTION } from './motion-state.constants';
 
 const ENGINE_DEBOUNCE_SECONDS = 30;
 
@@ -91,6 +92,23 @@ export class PositionService {
       if ((r.speed ?? 0) > 200) {
         this.logger.warn(
           `GPS discard: speed=${r.speed} km/h, lat=${r.lat}, lng=${r.lng}`,
+        );
+        continue;
+      }
+
+      // Satellite < 3 = juda past sifat, DB ga saqlamaslik
+      // 3 satellite = low quality — DB ga saqlanadi, lekin route/state machine ishlatmaydi
+      if (r.satellites < 3) {
+        this.logger.warn(
+          `GPS discard: satellites=${r.satellites}, lat=${r.lat}, lng=${r.lng}`,
+        );
+        continue;
+      }
+
+      // HDOP tekshirish — yuqori bo'lsa GPS aniqlik past
+      if (r.io.hdop !== null && r.io.hdop > MOTION.MAX_HDOP) {
+        this.logger.warn(
+          `GPS discard: hdop=${r.io.hdop}, lat=${r.lat}, lng=${r.lng}`,
         );
         continue;
       }

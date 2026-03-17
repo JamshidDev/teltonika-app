@@ -72,6 +72,12 @@ export class MotionStateService {
     // Tezlik tekshirish
     if ((record.speed ?? 0) > MOTION.MAX_SPEED) return false;
 
+    // Satellite soni tekshirish — kam bo'lsa GPS signal yomon
+    if (record.satellites < MOTION.MIN_SATELLITES) return false;
+
+    // HDOP tekshirish — yuqori bo'lsa GPS aniqlik past
+    if (record.io.hdop !== null && record.io.hdop > MOTION.MAX_HDOP) return false;
+
     // Masofa sakrash tekshirish (faqat avvalgi nuqta mavjud bo'lsa)
     if (lastLat !== 0 && lastLng !== 0) {
       const distance = this.calculateDistance(

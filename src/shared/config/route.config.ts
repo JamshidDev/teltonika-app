@@ -4,7 +4,7 @@ import { Configuration, Value } from '@itgorillaz/configify';
 @Configuration()
 export class RouteConfig {
   @Value('ROUTE_MIN_SPEED')
-  minSpeed: number = 2; // 10 → 2 (sekin harakatni ham ko'rsatish)
+  minSpeed: number = 1; // 1 km/h — faqat to'liq to'xtagan nuqtalarni chiqarish
 
   @Value('ROUTE_MIN_DISTANCE')
   minDistance: number = 5; // 10 → 5 (aniqroq route)
@@ -17,4 +17,10 @@ export class RouteConfig {
 
   @Value('ROUTE_SMOOTH_POINTS')
   smoothPoints: number = 3; // boshi/oxiri smooth uchun
+
+  @Value('ROUTE_MAX_SNAP_DISTANCE')
+  maxSnapDistance: number = 200; // metr — stop snap uchun max masofa
+
+  @Value('ROUTE_JITTER_THRESHOLD')
+  jitterThreshold: number = 15; // metr — bundan kam masofa = jitter smooth qilish
 }

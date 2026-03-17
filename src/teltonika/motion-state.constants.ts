@@ -9,6 +9,16 @@ export const MOTION = {
   GPS_JUMP_THRESHOLD: 300, // metr — bundan katta sakrash = ishonchsiz nuqta
   MAX_STOP_POINTS: 30, // centroid uchun max nuqtalar soni
   MAX_SPEED: 200, // km/h — bundan katta tezlik = noto'g'ri GPS
+  MIN_SATELLITES: 4, // route + state machine (yuqori sifat)
+  MIN_SATELLITES_SAVE: 2, // DB ga saqlash uchun minimum (audit trail)
+  MAX_HDOP: 5, // bundan katta = GPS aniqlik past (Horizontal Dilution of Precision)
+
+  // Event validation
+  EVENT_MIN_DURATION: 30, // sekund — bundan qisqa stop = shubhali
+  EVENT_MAX_ROUTE_DIST: 500, // metr — routedan bundan uzoq = shubhali
+
+  // Route: ignition off da harakatni aniqlash (towing)
+  NO_IGNITION_MIN_SPEED: 5, // km/h — ignition off da bundan yuqori tezlik = haqiqiy harakat
 } as const;
 
 export type MotionStatus =

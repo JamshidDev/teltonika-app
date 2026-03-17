@@ -13,6 +13,7 @@ import { CarHistoryDto, CarRouteDto } from './history.dto';
 import simplify from '@turf/simplify';
 import { lineString } from '@turf/helpers';
 import { RouteConfig } from '@config/route.config';
+import { MOTION } from '@/teltonika/motion-state.constants';
 
 interface RoutePoint {
   lat: number;
@@ -25,7 +26,8 @@ interface RoutePoint {
 interface TimelineRoute {
   type: 'route';
   points: RoutePoint[];
-  distance: number; // total distance in km
+  distance: number;
+  confidence: number; // 0-1 GPS sifat ko'rsatkichi
 }
 
 interface TimelineEvent {
@@ -35,6 +37,8 @@ interface TimelineEvent {
   startAt: string;
   endAt: string | null;
   duration: number | null;
+  confidence: number; // 0-1
+  suspicious: boolean; // true = shubhali event
 }
 
 type TimelineItem = TimelineRoute | TimelineEvent;
@@ -112,53 +116,18 @@ export class HistoryService {
   }
 
   async getCarRoute(dto: CarRouteDto) {
-    const result = await this.db.execute(sql`
-      WITH ranked AS (SELECT latitude,
-                             longitude,
-                             speed,
-                             angle,
-                             recorded_at,
-                             LAG(ST_MakePoint(longitude, latitude)::geography)
-                               OVER (ORDER BY recorded_at) as prev_point
-                      FROM car_positions
-                      WHERE car_id = ${dto.carId}
-                        AND recorded_at BETWEEN ${new Date(dto.from)} AND ${new Date(dto.to)}
-                        AND latitude != 0 AND longitude != 0
-                        AND ignition = true
-                        AND speed > ${this.routeConfig.minSpeed}
-        )
-      SELECT latitude    as lat,
-             longitude   as lng,
-             speed,
-             angle,
-             recorded_at as "recordedAt"
-      FROM ranked
-      WHERE prev_point IS NULL
-         OR ST_Distance(
-              ST_MakePoint(longitude, latitude)::geography,
-              prev_point
-            ) BETWEEN ${this.routeConfig.minDistance} AND ${this.routeConfig.maxDistance}
-      ORDER BY recorded_at ASC
-    `);
-
-    const points = result.rows as {
-      lat: number;
-      lng: number;
-      speed: number | null;
-      angle: number | null;
-      recordedAt: Date;
-    }[];
-
-    if (points.length < 2) return points;
-
-    const line = lineString(points.map((p) => [p.lng, p.lat]));
-    const simplified = simplify(line, { tolerance: 0.0001, highQuality: true });
-
-    const simplifiedCoords = new Set(
-      simplified.geometry.coordinates.map(([lng, lat]) => `${lat},${lng}`),
+    const rawPoints = await this.queryRoutePoints(
+      dto.carId,
+      new Date(dto.from),
+      new Date(dto.to),
     );
 
-    return points.filter((p) => simplifiedCoords.has(`${p.lat},${p.lng}`));
+    // Pipeline: filter → chain → jitter smooth → simplify
+    const chained = this.filterRouteChain(rawPoints);
+    if (chained.length < 2) return chained;
+
+    const smoothed = this.smoothJitter(chained);
+    return this.simplifyRoute(smoothed);
   }
 
   async getCarRouteWithEvents(carId: number, from: string, to: string) {
@@ -193,42 +162,16 @@ export class HistoryService {
       )
       .orderBy(carStopEvents.startAt);
 
-    // 2. Route nuqtalari — maxDistance filter qo'shildi (GPS sakrashlarni chiqarish)
-    const routeResult = await this.db.execute(sql`
-      WITH ranked AS (SELECT latitude,
-                             longitude,
-                             speed,
-                             angle,
-                             recorded_at,
-                             LAG(ST_MakePoint(longitude, latitude)::geography)
-                               OVER (ORDER BY recorded_at) as prev_point
-                      FROM car_positions
-                      WHERE car_id = ${carId}
-                        AND recorded_at BETWEEN ${dayStart} AND ${dayEnd}
-                        AND latitude != 0 AND longitude != 0
-                        AND ignition = true
-                        AND speed > ${this.routeConfig.minSpeed}
-        )
-      SELECT latitude    as lat,
-             longitude   as lng,
-             speed,
-             angle,
-             recorded_at as "recordedAt"
-      FROM ranked
-      WHERE prev_point IS NULL
-         OR ST_Distance(
-              ST_MakePoint(longitude, latitude)::geography,
-              prev_point
-            ) BETWEEN ${this.routeConfig.minDistance} AND ${this.routeConfig.maxDistance}
-      ORDER BY recorded_at ASC
-    `);
+    // 2. Route nuqtalari — movement-based (ignition-dan mustaqil)
+    const rawPoints = await this.queryRoutePoints(carId, dayStart, dayEnd);
 
-    const routePoints = routeResult.rows as unknown as RoutePoint[];
+    // Pipeline: filter → chain
+    const routePoints = this.filterRouteChain(rawPoints);
 
     const clippedEvents = this.clipEventsToRange(events, dayStart, dayEnd);
     const mergedEvents = this.mergeConsecutiveEvents(clippedEvents, routePoints);
 
-    // 3. Timeline yaratish
+    // 3. Timeline yaratish (snap + confidence + validation)
     const timeline = this.buildTimeline(routePoints, mergedEvents);
 
     return {
@@ -249,6 +192,7 @@ export class HistoryService {
              speed,
              angle,
              ignition,
+             satellites,
              recorded_at as "recordedAt"
       FROM car_positions
       WHERE car_id = ${carId}
@@ -260,92 +204,110 @@ export class HistoryService {
     return result.rows;
   }
 
-  private buildTimeline(
-    points: RoutePoint[],
-    events: {
-      type: string | null;
-      startAt: Date;
-      endAt: Date | null;
-      durationSeconds: number | null;
-      lat: number | null;
-      lng: number | null;
-    }[],
-  ): TimelineItem[] {
-    if (points.length === 0 && events.length === 0) return [];
+  // ─── Route query ───
 
-    const sortedEvents = events.map((e) => ({
-      type: (e.type ?? 'stop') as 'stop' | 'parking',
-      startAt: e.startAt,
-      endAt: e.endAt,
-      durationSeconds: e.durationSeconds,
-      lat: e.lat ?? 0,
-      lng: e.lng ?? 0,
-    }));
+  /**
+   * Route nuqtalarini olish — ignition = true YOKI speed >= 5 (towing/external movement).
+   * Strict ignition dependency olib tashlandi — harakat speed orqali aniqlanadi.
+   */
+  private async queryRoutePoints(
+    carId: number,
+    from: Date,
+    to: Date,
+  ): Promise<RoutePoint[]> {
+    const result = await this.db.execute(sql`
+      SELECT latitude    as lat,
+             longitude   as lng,
+             speed,
+             angle,
+             recorded_at as "recordedAt"
+      FROM car_positions
+      WHERE car_id = ${carId}
+        AND recorded_at BETWEEN ${from} AND ${to}
+        AND latitude != 0 AND longitude != 0
+        AND (ignition = true OR speed >= ${MOTION.NO_IGNITION_MIN_SPEED})
+        AND speed >= ${this.routeConfig.minSpeed}
+        AND satellites >= ${MOTION.MIN_SATELLITES}
+      ORDER BY recorded_at ASC
+    `);
 
-    const timeline: TimelineItem[] = [];
-    let pointIndex = 0;
+    return result.rows as unknown as RoutePoint[];
+  }
 
-    for (const event of sortedEvents) {
-      // Event oldidagi route nuqtalari
-      const segment: RoutePoint[] = [];
-      while (
-        pointIndex < points.length &&
-        new Date(points[pointIndex].recordedAt).getTime() <
-          event.startAt.getTime()
+  // ─── Pipeline: filter → chain → jitter → smooth → snap → simplify ───
+
+  /**
+   * Application-level route chain filter.
+   * Oxirgi QABUL QILINGAN nuqtadan masofa hisoblaydi (SQL LAG bug fix).
+   */
+  private filterRouteChain(points: RoutePoint[]): RoutePoint[] {
+    if (points.length === 0) return [];
+
+    const result: RoutePoint[] = [points[0]];
+
+    for (let i = 1; i < points.length; i++) {
+      const last = result[result.length - 1];
+      const curr = points[i];
+      const distance = this.calculateDistance(
+        last.lat,
+        last.lng,
+        curr.lat,
+        curr.lng,
+      );
+
+      if (
+        distance >= this.routeConfig.minDistance &&
+        distance <= this.routeConfig.maxDistance
       ) {
-        segment.push(points[pointIndex]);
-        pointIndex++;
+        result.push(curr);
       }
+    }
 
-      if (segment.length >= 2) {
-        // Route segment — smooth start/end
-        const smoothed = this.smoothRouteEndpoints(segment);
-        timeline.push({
-          type: 'route',
-          points: this.simplifyRoute(smoothed),
-          distance: this.calculateSegmentDistanceKm(smoothed),
+    return result;
+  }
+
+  /**
+   * Jitter smoothing — kichik GPS noise uchun 3 nuqtali weighted average.
+   * Faqat juda yaqin nuqtalar smooth qilinadi, haqiqiy harakat saqlanadi.
+   */
+  private smoothJitter(points: RoutePoint[]): RoutePoint[] {
+    if (points.length <= 2) return points;
+
+    const threshold = this.routeConfig.jitterThreshold;
+    const result: RoutePoint[] = [points[0]];
+
+    for (let i = 1; i < points.length - 1; i++) {
+      const prev = result[result.length - 1];
+      const curr = points[i];
+      const next = points[i + 1];
+
+      const distPrev = this.calculateDistance(
+        prev.lat,
+        prev.lng,
+        curr.lat,
+        curr.lng,
+      );
+      const distNext = this.calculateDistance(
+        curr.lat,
+        curr.lng,
+        next.lat,
+        next.lng,
+      );
+
+      // Ikkala qo'shni juda yaqin = jitter, smooth qilish
+      if (distPrev < threshold && distNext < threshold) {
+        result.push({
+          ...curr,
+          lat: (prev.lat + curr.lat + next.lat) / 3,
+          lng: (prev.lng + curr.lng + next.lng) / 3,
         });
-      }
-
-      // Event marker
-      timeline.push({
-        type: event.type,
-        lat: event.lat,
-        lng: event.lng,
-        startAt: event.startAt.toISOString(),
-        endAt: event.endAt?.toISOString() ?? null,
-        duration: event.durationSeconds,
-      });
-
-      // Event davomidagi nuqtalarni o'tkazish
-      if (event.endAt) {
-        while (
-          pointIndex < points.length &&
-          new Date(points[pointIndex].recordedAt).getTime() <=
-            event.endAt.getTime()
-        ) {
-          pointIndex++;
-        }
+      } else {
+        result.push(curr);
       }
     }
 
-    // Oxirgi eventdan keyingi qolgan nuqtalar
-    const remaining: RoutePoint[] = [];
-    while (pointIndex < points.length) {
-      remaining.push(points[pointIndex]);
-      pointIndex++;
-    }
-
-    if (remaining.length >= 2) {
-      const smoothed = this.smoothRouteEndpoints(remaining);
-      timeline.push({
-        type: 'route',
-        points: this.simplifyRoute(smoothed),
-        distance: this.calculateSegmentDistanceKm(smoothed),
-      });
-    }
-
-    return timeline;
+    result.push(points[points.length - 1]);
+    return result;
   }
 
   /** Route boshi va oxirini smoothPoints nuqtaning o'rtachasi bilan smooth qilish */
@@ -355,12 +317,10 @@ export class HistoryService {
 
     const result = [...points];
 
-    // Boshlang'ich nuqtalarni smooth
     const startSlice = points.slice(0, n);
     const startAvg = this.averagePoint(startSlice);
     result[0] = { ...result[0], lat: startAvg.lat, lng: startAvg.lng };
 
-    // Oxirgi nuqtalarni smooth
     const endSlice = points.slice(-n);
     const endAvg = this.averagePoint(endSlice);
     result[result.length - 1] = {
@@ -383,6 +343,395 @@ export class HistoryService {
     };
   }
 
+  /**
+   * Adaptive simplification:
+   * - Tolerance nuqtalar soniga qarab moslashadi
+   * - Birinchi va oxirgi nuqtalar DOIM saqlanadi (event boundary)
+   */
+  private simplifyRoute(points: RoutePoint[]): RoutePoint[] {
+    if (points.length <= 10) return points;
+
+    const tolerance =
+      points.length > 500
+        ? 0.0003
+        : points.length > 200
+          ? 0.0002
+          : points.length > 50
+            ? 0.00015
+            : 0.0001;
+
+    const line = lineString(points.map((p) => [p.lng, p.lat]));
+    const simplified = simplify(line, { tolerance, highQuality: true });
+
+    const simplifiedCoords = new Set(
+      simplified.geometry.coordinates.map(([lng, lat]) => `${lat},${lng}`),
+    );
+
+    // Birinchi va oxirgi nuqtalar doim saqlanadi
+    simplifiedCoords.add(`${points[0].lat},${points[0].lng}`);
+    simplifiedCoords.add(
+      `${points[points.length - 1].lat},${points[points.length - 1].lng}`,
+    );
+
+    return points.filter((p) => simplifiedCoords.has(`${p.lat},${p.lng}`));
+  }
+
+  // ─── Snap to route ───
+
+  /**
+   * Stop nuqtasini routega snap qilish — fallback zanjiri:
+   * 1. Segment proeksiya (eng aniq)
+   * 2. Eng yaqin nuqta (segment yo'q bo'lsa)
+   * 3. Original koordinata (route juda uzoq)
+   */
+  private snapStopToRoute(
+    stopLat: number,
+    stopLng: number,
+    routePoints: RoutePoint[],
+  ): { lat: number; lng: number; snapDistance: number } {
+    const maxSnap = this.routeConfig.maxSnapDistance;
+
+    if (routePoints.length === 0) {
+      return { lat: stopLat, lng: stopLng, snapDistance: -1 };
+    }
+
+    let minDist = Infinity;
+    let closestLat = stopLat;
+    let closestLng = stopLng;
+
+    // 1. Segment proeksiya — eng yaqin segmentga perpendicular proeksiya
+    if (routePoints.length >= 2) {
+      for (let i = 0; i < routePoints.length - 1; i++) {
+        const a = routePoints[i];
+        const b = routePoints[i + 1];
+
+        const projected = this.projectPointToSegment(
+          stopLat,
+          stopLng,
+          a.lat,
+          a.lng,
+          b.lat,
+          b.lng,
+        );
+
+        const dist = this.calculateDistance(
+          stopLat,
+          stopLng,
+          projected.lat,
+          projected.lng,
+        );
+
+        if (dist < minDist) {
+          minDist = dist;
+          closestLat = projected.lat;
+          closestLng = projected.lng;
+        }
+      }
+    }
+
+    // 2. Fallback: eng yaqin bitta nuqta (1 nuqtali route yoki segment proeksiya ishlamasa)
+    if (minDist > maxSnap) {
+      for (const p of routePoints) {
+        const d = this.calculateDistance(stopLat, stopLng, p.lat, p.lng);
+        if (d < minDist) {
+          minDist = d;
+          closestLat = p.lat;
+          closestLng = p.lng;
+        }
+      }
+    }
+
+    // 3. Faqat maxSnap ichida bo'lsa snap, aks holda original
+    if (minDist <= maxSnap) {
+      return { lat: closestLat, lng: closestLng, snapDistance: minDist };
+    }
+
+    return { lat: stopLat, lng: stopLng, snapDistance: minDist };
+  }
+
+  private projectPointToSegment(
+    pLat: number,
+    pLng: number,
+    aLat: number,
+    aLng: number,
+    bLat: number,
+    bLng: number,
+  ): { lat: number; lng: number } {
+    const dx = bLng - aLng;
+    const dy = bLat - aLat;
+    const lenSq = dx * dx + dy * dy;
+
+    if (lenSq === 0) return { lat: aLat, lng: aLng };
+
+    const t = Math.max(
+      0,
+      Math.min(1, ((pLng - aLng) * dx + (pLat - aLat) * dy) / lenSq),
+    );
+
+    return {
+      lat: aLat + t * dy,
+      lng: aLng + t * dx,
+    };
+  }
+
+  // ─── Timeline builder ───
+
+  private buildTimeline(
+    points: RoutePoint[],
+    events: {
+      type: string | null;
+      startAt: Date;
+      endAt: Date | null;
+      durationSeconds: number | null;
+      lat: number | null;
+      lng: number | null;
+    }[],
+  ): TimelineItem[] {
+    if (points.length === 0 && events.length === 0) return [];
+
+    // Route vaqtlarini pre-compute (performance: mergeConsecutiveEvents uchun)
+    const routeTimes = points.map((p) => new Date(p.recordedAt).getTime());
+
+    const sortedEvents = events.map((e) => ({
+      type: (e.type ?? 'stop') as 'stop' | 'parking',
+      startAt: e.startAt,
+      endAt: e.endAt,
+      durationSeconds: e.durationSeconds,
+      lat: e.lat ?? 0,
+      lng: e.lng ?? 0,
+    }));
+
+    const timeline: TimelineItem[] = [];
+    let pointIndex = 0;
+
+    for (const event of sortedEvents) {
+      // Event oldidagi route nuqtalari
+      const segment: RoutePoint[] = [];
+      while (
+        pointIndex < points.length &&
+        routeTimes[pointIndex] < event.startAt.getTime()
+      ) {
+        segment.push(points[pointIndex]);
+        pointIndex++;
+      }
+
+      if (segment.length >= 1) {
+        this.pushRouteSegment(timeline, segment);
+      }
+
+      // Event marker — adaptive time window snap
+      const nearbyPoints = this.getNearbyPoints(
+        points,
+        routeTimes,
+        event.startAt,
+        event.endAt,
+      );
+      const snapped = this.snapStopToRoute(
+        event.lat,
+        event.lng,
+        nearbyPoints,
+      );
+
+      // Event validation — confidence + suspicious
+      const { confidence, suspicious } = this.computeEventConfidence(
+        event,
+        snapped.snapDistance,
+      );
+
+      timeline.push({
+        type: event.type,
+        lat: snapped.lat,
+        lng: snapped.lng,
+        startAt: event.startAt.toISOString(),
+        endAt: event.endAt?.toISOString() ?? null,
+        duration: event.durationSeconds,
+        confidence,
+        suspicious,
+      });
+
+      // Event davomidagi nuqtalarni o'tkazish
+      if (event.endAt) {
+        const endTime = event.endAt.getTime();
+        while (pointIndex < points.length && routeTimes[pointIndex] <= endTime) {
+          pointIndex++;
+        }
+      }
+    }
+
+    // Oxirgi eventdan keyingi qolgan nuqtalar
+    const remaining: RoutePoint[] = [];
+    while (pointIndex < points.length) {
+      remaining.push(points[pointIndex]);
+      pointIndex++;
+    }
+
+    if (remaining.length >= 1) {
+      this.pushRouteSegment(timeline, remaining);
+    }
+
+    // Edge case: eventlar bor lekin route yo'q — eventlarni bo'sh route bilan qaytarish
+    if (points.length === 0 && events.length > 0) {
+      for (const event of sortedEvents) {
+        const { confidence, suspicious } = this.computeEventConfidence(
+          event,
+          -1,
+        );
+        timeline.push({
+          type: event.type,
+          lat: event.lat,
+          lng: event.lng,
+          startAt: event.startAt.toISOString(),
+          endAt: event.endAt?.toISOString() ?? null,
+          duration: event.durationSeconds,
+          confidence,
+          suspicious,
+        });
+      }
+    }
+
+    return timeline;
+  }
+
+  /**
+   * Route segmentni timeline'ga qo'shish.
+   * Pipeline: chain filter → jitter smooth → endpoint smooth → simplify
+   */
+  private pushRouteSegment(
+    timeline: TimelineItem[],
+    segment: RoutePoint[],
+  ): void {
+    if (segment.length === 1) {
+      timeline.push({
+        type: 'route',
+        points: segment,
+        distance: 0,
+        confidence: 0.3, // bitta nuqta = past ishonch
+      });
+      return;
+    }
+
+    // Pipeline: chain → jitter → endpoint smooth → simplify
+    const chained = this.filterRouteChain(segment);
+    if (chained.length === 0) return;
+
+    const jitterSmoothed = this.smoothJitter(chained);
+    const endpointSmoothed = this.smoothRouteEndpoints(jitterSmoothed);
+    const simplified = this.simplifyRoute(endpointSmoothed);
+    const confidence = this.computeRouteConfidence(endpointSmoothed);
+
+    timeline.push({
+      type: 'route',
+      points: simplified,
+      distance: this.calculateSegmentDistanceKm(endpointSmoothed),
+      confidence,
+    });
+  }
+
+  // ─── Confidence scoring ───
+
+  /**
+   * Route segment confidence: nuqtalar zichligi (points per km) asosida.
+   * Ko'p nuqta = GPS signal yaxshi = yuqori ishonch.
+   */
+  private computeRouteConfidence(points: RoutePoint[]): number {
+    if (points.length === 0) return 0;
+    if (points.length === 1) return 0.3;
+
+    const distanceKm = this.calculateSegmentDistanceKm(points);
+    if (distanceKm === 0) return points.length > 1 ? 0.5 : 0.3;
+
+    // 20 nuqta/km = ideal Teltonika configuration
+    const density = points.length / distanceKm;
+    const densityScore = Math.min(density / 20, 1);
+
+    return Math.round(densityScore * 100) / 100;
+  }
+
+  /**
+   * Event confidence: duration va route uzoqligi asosida.
+   * Suspicious: juda qisqa, routedan juda uzoq, yoki route yo'q.
+   */
+  private computeEventConfidence(
+    event: { durationSeconds: number | null; lat: number; lng: number },
+    snapDistance: number,
+  ): { confidence: number; suspicious: boolean } {
+    let confidence = 1;
+    let suspicious = false;
+
+    // Duration juda qisqa
+    if (
+      event.durationSeconds !== null &&
+      event.durationSeconds < MOTION.EVENT_MIN_DURATION
+    ) {
+      confidence -= 0.3;
+      suspicious = true;
+    }
+
+    // Routedan juda uzoq
+    if (snapDistance >= 0) {
+      if (snapDistance > MOTION.EVENT_MAX_ROUTE_DIST) {
+        confidence -= 0.4;
+        suspicious = true;
+      } else if (snapDistance > this.routeConfig.maxSnapDistance) {
+        confidence -= 0.2;
+      }
+    }
+
+    // Route umuman yo'q (snap distance = -1)
+    if (snapDistance === -1) {
+      confidence -= 0.1; // route yo'q = biroz past, lekin xato emas
+    }
+
+    return {
+      confidence: Math.max(0, Math.round(confidence * 100) / 100),
+      suspicious,
+    };
+  }
+
+  // ─── Nearby points (adaptive time window + binary search) ───
+
+  /**
+   * Event atrofidagi route nuqtalarini olish.
+   * Adaptive margin: event davomiyligining 50% yoki min 5 minut.
+   * Binary search: sorted array'da O(log n) qidiruv.
+   */
+  private getNearbyPoints(
+    allPoints: RoutePoint[],
+    routeTimes: number[],
+    eventStart: Date,
+    eventEnd: Date | null,
+  ): RoutePoint[] {
+    if (allPoints.length === 0) return [];
+
+    // Adaptive margin: event davomiyligining 50% yoki min 5 minut
+    const eventDuration =
+      (eventEnd?.getTime() ?? eventStart.getTime()) - eventStart.getTime();
+    const margin = Math.max(5 * 60 * 1000, eventDuration * 0.5);
+
+    const rangeStart = eventStart.getTime() - margin;
+    const rangeEnd = (eventEnd?.getTime() ?? eventStart.getTime()) + margin;
+
+    // Binary search: start index topish
+    let lo = 0;
+    let hi = routeTimes.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (routeTimes[mid] < rangeStart) lo = mid + 1;
+      else hi = mid;
+    }
+
+    // Range ichidagi nuqtalarni yig'ish
+    const result: RoutePoint[] = [];
+    for (let i = lo; i < allPoints.length; i++) {
+      if (routeTimes[i] > rangeEnd) break;
+      result.push(allPoints[i]);
+    }
+
+    return result;
+  }
+
+  // ─── Event merging ───
+
   /** Ketma-ket eventlarni birlashtirish (orasida route nuqtasi bo'lmasa, <60s gap) */
   private mergeConsecutiveEvents(
     events: {
@@ -396,6 +745,9 @@ export class HistoryService {
     routePoints: RoutePoint[],
   ) {
     if (events.length <= 1) return events;
+
+    // Performance: route vaqtlarini sorted array qilib, binary search ishlatish
+    const routeTimes = routePoints.map((p) => new Date(p.recordedAt).getTime());
 
     const merged: typeof events = [];
 
@@ -411,12 +763,14 @@ export class HistoryService {
         ? (event.startAt.getTime() - prev.endAt.getTime()) / 1000
         : 0;
 
+      // Binary search: oradagi route nuqtasi bormi
       const hasRouteBetween =
         prev.endAt &&
-        routePoints.some((p) => {
-          const t = new Date(p.recordedAt).getTime();
-          return t > prev.endAt!.getTime() && t < event.startAt.getTime();
-        });
+        this.hasRoutePointBetween(
+          routeTimes,
+          prev.endAt.getTime(),
+          event.startAt.getTime(),
+        );
 
       if (gap <= 60 && !hasRouteBetween) {
         prev.endAt = event.endAt;
@@ -432,6 +786,28 @@ export class HistoryService {
     }
 
     return merged;
+  }
+
+  /**
+   * Binary search: ikki vaqt orasida route nuqtasi bormi.
+   * O(log n) — .some() O(n) o'rniga.
+   */
+  private hasRoutePointBetween(
+    sortedTimes: number[],
+    afterMs: number,
+    beforeMs: number,
+  ): boolean {
+    // afterMs dan keyingi birinchi elementni topish
+    let lo = 0;
+    let hi = sortedTimes.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (sortedTimes[mid] <= afterMs) lo = mid + 1;
+      else hi = mid;
+    }
+
+    // Topilgan element beforeMs dan oldinmi?
+    return lo < sortedTimes.length && sortedTimes[lo] < beforeMs;
   }
 
   private clipEventsToRange(
@@ -467,13 +843,15 @@ export class HistoryService {
     });
   }
 
+  // ─── Geo utils ───
+
   private calculateDistance(
     lat1: number,
     lng1: number,
     lat2: number,
     lng2: number,
   ): number {
-    const R = 6371000; // Earth radius in meters
+    const R = 6371000;
     const dLat = ((lat2 - lat1) * Math.PI) / 180;
     const dLng = ((lng2 - lng1) * Math.PI) / 180;
     const a =
@@ -495,19 +873,6 @@ export class HistoryService {
         points[i].lng,
       );
     }
-    return Math.round((totalMeters / 1000) * 10) / 10; // km, 1 decimal place
-  }
-
-  private simplifyRoute(points: RoutePoint[]): RoutePoint[] {
-    if (points.length < 2) return points;
-
-    const line = lineString(points.map((p) => [p.lng, p.lat]));
-    const simplified = simplify(line, { tolerance: 0.0001, highQuality: true });
-
-    const simplifiedCoords = new Set(
-      simplified.geometry.coordinates.map(([lng, lat]) => `${lat},${lng}`),
-    );
-
-    return points.filter((p) => simplifiedCoords.has(`${p.lat},${p.lng}`));
+    return Math.round((totalMeters / 1000) * 10) / 10;
   }
 }
