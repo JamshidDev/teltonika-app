@@ -421,18 +421,26 @@ export class HistoryService {
    * Adaptive simplification:
    * - Tolerance nuqtalar soniga qarab moslashadi
    * - Birinchi va oxirgi nuqtalar DOIM saqlanadi (event boundary)
+   *
+   * Tolerance = degree. 0.00005 ≈ 5m, 0.0001 ≈ 11m, 0.0002 ≈ 22m
+   * Shahar yo'llarida burilishlar muhim — tolerance past bo'lishi kerak.
+   * Aks holda yo'ldan kesib o'tuvchi to'g'ri chiziqlar paydo bo'ladi.
    */
   private simplifyRoute(points: RoutePoint[]): RoutePoint[] {
-    if (points.length <= 10) return points;
+    if (points.length <= 30) return points;
 
+    // Tolerance: shaxar yo'llarida burilishlar saqlash uchun past bo'lishi kerak.
+    // 0.00003 ≈ 3m (eng aniq), 0.0001 ≈ 11m (maximal simplify)
     const tolerance =
-      points.length > 500
-        ? 0.0003
-        : points.length > 200
-          ? 0.0002
-          : points.length > 50
-            ? 0.00015
-            : 0.0001;
+      points.length > 5000
+        ? 0.0001
+        : points.length > 2000
+          ? 0.00007
+          : points.length > 1000
+            ? 0.00005
+            : points.length > 300
+              ? 0.00004
+              : 0.00003;
 
     const line = lineString(points.map((p) => [p.lng, p.lat]));
     const simplified = simplify(line, { tolerance, highQuality: true });
