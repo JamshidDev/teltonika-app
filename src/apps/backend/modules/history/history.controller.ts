@@ -37,6 +37,16 @@ export class HistoryController {
     return this.historyService.getRawPositions(dto.carId, dto.from, dto.to);
   }
 
+  /** Diagnostika: qaysi filter qancha nuqtani yo'q qilayotganini ko'rsatadi */
+  @Get('diagnose-filters')
+  async diagnoseFilters(@Query() dto: CarRouteWithEventsDto) {
+    return this.historyService.diagnosRouteFilters(
+      dto.carId,
+      dto.from,
+      dto.to,
+    );
+  }
+
   @Get('route/geojson')
   async getCarRouteGeoJson(@Query() dto: CarRouteDto) {
     const data = await this.historyService.getCarRoute(dto);

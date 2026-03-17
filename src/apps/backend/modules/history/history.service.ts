@@ -204,6 +204,73 @@ export class HistoryService {
     return result.rows;
   }
 
+  /**
+   * DIAGNOSTIKA: Qaysi filter qancha nuqtani yo'q qilayotganini ko'rsatadi.
+   * Production da o'chirib qo'yish mumkin.
+   */
+  async diagnosRouteFilters(carId: number, from: string, to: string) {
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+
+    const result = await this.db.execute(sql`
+      SELECT
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE latitude != 0 AND longitude != 0) as valid_coords,
+        COUNT(*) FILTER (WHERE latitude != 0 AND longitude != 0 AND ignition = true) as with_ignition,
+        COUNT(*) FILTER (WHERE latitude != 0 AND longitude != 0 AND speed >= ${this.routeConfig.minSpeed}) as above_min_speed,
+        COUNT(*) FILTER (WHERE latitude != 0 AND longitude != 0 AND satellites >= ${MOTION.MIN_SATELLITES}) as sat_gte_4,
+        COUNT(*) FILTER (WHERE latitude != 0 AND longitude != 0 AND satellites >= 3) as sat_gte_3,
+        COUNT(*) FILTER (WHERE latitude != 0 AND longitude != 0 AND satellites >= 2) as sat_gte_2,
+        COUNT(*) FILTER (WHERE latitude != 0 AND longitude != 0
+          AND (ignition = true OR speed >= ${MOTION.NO_IGNITION_MIN_SPEED})
+          AND speed >= ${this.routeConfig.minSpeed}
+          AND satellites >= ${MOTION.MIN_SATELLITES}
+        ) as route_query_result,
+        COUNT(*) FILTER (WHERE latitude != 0 AND longitude != 0
+          AND (ignition = true OR speed >= ${MOTION.NO_IGNITION_MIN_SPEED})
+          AND speed >= ${this.routeConfig.minSpeed}
+          AND satellites >= 3
+        ) as route_with_sat3,
+        AVG(satellites) FILTER (WHERE latitude != 0 AND longitude != 0) as avg_satellites,
+        MIN(satellites) FILTER (WHERE latitude != 0 AND longitude != 0) as min_satellites,
+        MAX(satellites) FILTER (WHERE latitude != 0 AND longitude != 0) as max_satellites,
+        AVG(speed) FILTER (WHERE latitude != 0 AND longitude != 0 AND speed > 0) as avg_speed
+      FROM car_positions
+      WHERE car_id = ${carId}
+        AND recorded_at BETWEEN ${fromDate} AND ${toDate}
+    `);
+
+    const stats = result.rows[0] as Record<string, unknown>;
+
+    return {
+      carId,
+      from,
+      to,
+      filters: {
+        total: Number(stats.total),
+        validCoords: Number(stats.valid_coords),
+        withIgnition: Number(stats.with_ignition),
+        aboveMinSpeed: Number(stats.above_min_speed),
+        satellitesGte4: Number(stats.sat_gte_4),
+        satellitesGte3: Number(stats.sat_gte_3),
+        satellitesGte2: Number(stats.sat_gte_2),
+        routeQueryResult: Number(stats.route_query_result),
+        routeWithSat3: Number(stats.route_with_sat3),
+      },
+      gpsQuality: {
+        avgSatellites: Number(Number(stats.avg_satellites).toFixed(1)),
+        minSatellites: Number(stats.min_satellites),
+        maxSatellites: Number(stats.max_satellites),
+        avgSpeed: Number(Number(stats.avg_speed).toFixed(1)),
+      },
+      config: {
+        minSpeed: this.routeConfig.minSpeed,
+        minSatellites: MOTION.MIN_SATELLITES,
+        noIgnitionMinSpeed: MOTION.NO_IGNITION_MIN_SPEED,
+      },
+    };
+  }
+
   // ─── Route query ───
 
   /**
