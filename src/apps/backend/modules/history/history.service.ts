@@ -123,11 +123,9 @@ export class HistoryService {
                       FROM car_positions
                       WHERE car_id = ${dto.carId}
                         AND recorded_at BETWEEN ${new Date(dto.from)} AND ${new Date(dto.to)}
-                        AND latitude
-        != 0 AND longitude != 0
-        AND ignition = true
-        AND speed
-         > ${this.routeConfig.minSpeed}
+                        AND latitude != 0 AND longitude != 0
+                        AND ignition = true
+                        AND speed > ${this.routeConfig.minSpeed}
         )
       SELECT latitude    as lat,
              longitude   as lng,
@@ -139,7 +137,7 @@ export class HistoryService {
          OR ST_Distance(
               ST_MakePoint(longitude, latitude)::geography,
               prev_point
-            ) > ${this.routeConfig.minDistance}
+            ) BETWEEN ${this.routeConfig.minDistance} AND ${this.routeConfig.maxDistance}
       ORDER BY recorded_at ASC
     `);
 
@@ -184,13 +182,10 @@ export class HistoryService {
           or(
             between(carStopEvents.startAt, dayStart, dayEnd),
             and(
-              sql`${carStopEvents.startAt}
-              <
-              ${dayStart}`,
+              sql`${carStopEvents.startAt} < ${dayStart}`,
               or(
                 between(carStopEvents.endAt, dayStart, dayEnd),
-                sql`${carStopEvents.endAt}
-                IS NULL`,
+                sql`${carStopEvents.endAt} IS NULL`,
               ),
             ),
           ),
@@ -198,7 +193,7 @@ export class HistoryService {
       )
       .orderBy(carStopEvents.startAt);
 
-    // 2. Route nuqtalari
+    // 2. Route nuqtalari — maxDistance filter qo'shildi (GPS sakrashlarni chiqarish)
     const routeResult = await this.db.execute(sql`
       WITH ranked AS (SELECT latitude,
                              longitude,
@@ -210,11 +205,9 @@ export class HistoryService {
                       FROM car_positions
                       WHERE car_id = ${carId}
                         AND recorded_at BETWEEN ${dayStart} AND ${dayEnd}
-                        AND latitude
-        != 0 AND longitude != 0
-        AND ignition = true
-        AND speed
-         > ${this.routeConfig.minSpeed}
+                        AND latitude != 0 AND longitude != 0
+                        AND ignition = true
+                        AND speed > ${this.routeConfig.minSpeed}
         )
       SELECT latitude    as lat,
              longitude   as lng,
@@ -226,25 +219,45 @@ export class HistoryService {
          OR ST_Distance(
               ST_MakePoint(longitude, latitude)::geography,
               prev_point
-            ) > ${this.routeConfig.minDistance}
+            ) BETWEEN ${this.routeConfig.minDistance} AND ${this.routeConfig.maxDistance}
       ORDER BY recorded_at ASC
     `);
 
     const routePoints = routeResult.rows as unknown as RoutePoint[];
 
     const clippedEvents = this.clipEventsToRange(events, dayStart, dayEnd);
+    const mergedEvents = this.mergeConsecutiveEvents(clippedEvents, routePoints);
 
     // 3. Timeline yaratish
-    const timeline = this.buildTimeline(routePoints, clippedEvents);
+    const timeline = this.buildTimeline(routePoints, mergedEvents);
 
     return {
       carId,
       from,
       to,
-      totalEvents: events.length,
+      totalEvents: mergedEvents.length,
       totalRoutePoints: routePoints.length,
       timeline,
     };
+  }
+
+  /** Raw pozitsiyalar — filtrsiz, debugging uchun */
+  async getRawPositions(carId: number, from: string, to: string) {
+    const result = await this.db.execute(sql`
+      SELECT latitude    as lat,
+             longitude   as lng,
+             speed,
+             angle,
+             ignition,
+             recorded_at as "recordedAt"
+      FROM car_positions
+      WHERE car_id = ${carId}
+        AND recorded_at BETWEEN ${new Date(from)} AND ${new Date(to)}
+        AND latitude != 0 AND longitude != 0
+      ORDER BY recorded_at ASC
+    `);
+
+    return result.rows;
   }
 
   private buildTimeline(
@@ -285,10 +298,12 @@ export class HistoryService {
       }
 
       if (segment.length >= 2) {
+        // Route segment — smooth start/end
+        const smoothed = this.smoothRouteEndpoints(segment);
         timeline.push({
           type: 'route',
-          points: this.simplifyRoute(segment),
-          distance: this.calculateSegmentDistanceKm(segment),
+          points: this.simplifyRoute(smoothed),
+          distance: this.calculateSegmentDistanceKm(smoothed),
         });
       }
 
@@ -322,14 +337,101 @@ export class HistoryService {
     }
 
     if (remaining.length >= 2) {
+      const smoothed = this.smoothRouteEndpoints(remaining);
       timeline.push({
         type: 'route',
-        points: this.simplifyRoute(remaining),
-        distance: this.calculateSegmentDistanceKm(remaining),
+        points: this.simplifyRoute(smoothed),
+        distance: this.calculateSegmentDistanceKm(smoothed),
       });
     }
 
     return timeline;
+  }
+
+  /** Route boshi va oxirini smoothPoints nuqtaning o'rtachasi bilan smooth qilish */
+  private smoothRouteEndpoints(points: RoutePoint[]): RoutePoint[] {
+    const n = this.routeConfig.smoothPoints;
+    if (points.length <= n) return points;
+
+    const result = [...points];
+
+    // Boshlang'ich nuqtalarni smooth
+    const startSlice = points.slice(0, n);
+    const startAvg = this.averagePoint(startSlice);
+    result[0] = { ...result[0], lat: startAvg.lat, lng: startAvg.lng };
+
+    // Oxirgi nuqtalarni smooth
+    const endSlice = points.slice(-n);
+    const endAvg = this.averagePoint(endSlice);
+    result[result.length - 1] = {
+      ...result[result.length - 1],
+      lat: endAvg.lat,
+      lng: endAvg.lng,
+    };
+
+    return result;
+  }
+
+  private averagePoint(points: RoutePoint[]): { lat: number; lng: number } {
+    const sum = points.reduce(
+      (acc, p) => ({ lat: acc.lat + p.lat, lng: acc.lng + p.lng }),
+      { lat: 0, lng: 0 },
+    );
+    return {
+      lat: sum.lat / points.length,
+      lng: sum.lng / points.length,
+    };
+  }
+
+  /** Ketma-ket eventlarni birlashtirish (orasida route nuqtasi bo'lmasa, <60s gap) */
+  private mergeConsecutiveEvents(
+    events: {
+      type: string | null;
+      startAt: Date;
+      endAt: Date | null;
+      durationSeconds: number | null;
+      lat: number | null;
+      lng: number | null;
+    }[],
+    routePoints: RoutePoint[],
+  ) {
+    if (events.length <= 1) return events;
+
+    const merged: typeof events = [];
+
+    for (const event of events) {
+      const prev = merged[merged.length - 1];
+
+      if (!prev) {
+        merged.push({ ...event });
+        continue;
+      }
+
+      const gap = prev.endAt
+        ? (event.startAt.getTime() - prev.endAt.getTime()) / 1000
+        : 0;
+
+      const hasRouteBetween =
+        prev.endAt &&
+        routePoints.some((p) => {
+          const t = new Date(p.recordedAt).getTime();
+          return t > prev.endAt!.getTime() && t < event.startAt.getTime();
+        });
+
+      if (gap <= 60 && !hasRouteBetween) {
+        prev.endAt = event.endAt;
+        prev.durationSeconds = prev.endAt
+          ? Math.floor(
+              (prev.endAt.getTime() - prev.startAt.getTime()) / 1000,
+            )
+          : null;
+        if (event.type === 'parking') prev.type = 'parking';
+      } else {
+        merged.push({ ...event });
+      }
+    }
+
+    return merged;
   }
 
   private clipEventsToRange(
@@ -387,10 +489,10 @@ export class HistoryService {
     let totalMeters = 0;
     for (let i = 1; i < points.length; i++) {
       totalMeters += this.calculateDistance(
-        points[i - 1]!.lat,
-        points[i - 1]!.lng,
-        points[i]!.lat,
-        points[i]!.lng,
+        points[i - 1].lat,
+        points[i - 1].lng,
+        points[i].lat,
+        points[i].lng,
       );
     }
     return Math.round((totalMeters / 1000) * 10) / 10; // km, 1 decimal place

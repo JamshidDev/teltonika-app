@@ -32,6 +32,11 @@ export class HistoryController {
     );
   }
 
+  @Get('raw-positions')
+  async getRawPositions(@Query() dto: CarRouteWithEventsDto) {
+    return this.historyService.getRawPositions(dto.carId, dto.from, dto.to);
+  }
+
   @Get('route/geojson')
   async getCarRouteGeoJson(@Query() dto: CarRouteDto) {
     const data = await this.historyService.getCarRoute(dto);

@@ -5,9 +5,13 @@ import { Cron } from '@nestjs/schedule';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
 import { cars, carStopEvents } from '@/shared/database/schema';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, gte, isNull } from 'drizzle-orm';
 import { GpsRecord } from './codec8.parser';
-import { MOTION, MotionState } from './motion-state.constants';
+import {
+  MOTION,
+  MotionState,
+  StopPoint,
+} from './motion-state.constants';
 import { TrackingGateway } from '@/shared/gateway/tracking.gateway';
 
 const ACTIVE_CARS_KEY = 'motion:active';
@@ -46,6 +50,62 @@ export class MotionStateService {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
+  /** Nuqtalar arrayidan centroid (o'rtacha) hisoblash */
+  private computeCentroid(points: StopPoint[]): { lat: number; lng: number } {
+    if (points.length === 0) return { lat: 0, lng: 0 };
+    const sum = points.reduce(
+      (acc, p) => ({ lat: acc.lat + p.lat, lng: acc.lng + p.lng }),
+      { lat: 0, lng: 0 },
+    );
+    return {
+      lat: sum.lat / points.length,
+      lng: sum.lng / points.length,
+    };
+  }
+
+  /** GPS nuqta ishonchli yoki yo'qligini tekshirish */
+  private isReliablePoint(
+    record: GpsRecord,
+    lastLat: number,
+    lastLng: number,
+  ): boolean {
+    // Tezlik tekshirish
+    if ((record.speed ?? 0) > MOTION.MAX_SPEED) return false;
+
+    // Masofa sakrash tekshirish (faqat avvalgi nuqta mavjud bo'lsa)
+    if (lastLat !== 0 && lastLng !== 0) {
+      const distance = this.calculateDistance(
+        lastLat,
+        lastLng,
+        record.lat,
+        record.lng,
+      );
+      if (distance > MOTION.GPS_JUMP_THRESHOLD) return false;
+    }
+
+    return true;
+  }
+
+  /** Stop nuqtalarini qo'shish (max limitdan oshmasin) */
+  private addStopPoint(
+    points: StopPoint[],
+    record: GpsRecord,
+  ): StopPoint[] {
+    const newPoints = [
+      ...points,
+      {
+        lat: record.lat,
+        lng: record.lng,
+        recordedAt: new Date(record.timestamp).toISOString(),
+      },
+    ];
+    // MAX limitdan oshsa — eskisini olib tashlash
+    if (newPoints.length > MOTION.MAX_STOP_POINTS) {
+      return newPoints.slice(-MOTION.MAX_STOP_POINTS);
+    }
+    return newPoints;
+  }
+
   // ─── Redis ───
 
   async getState(carId: number): Promise<MotionState | null> {
@@ -81,7 +141,12 @@ export class MotionStateService {
       'status' in data &&
       'since' in data
     ) {
-      return data as MotionState;
+      const state = data as MotionState;
+      // Backward compatibility: eski state'larda yangi fieldlar yo'q
+      if (state.lastLat === undefined) state.lastLat = state.lat;
+      if (state.lastLng === undefined) state.lastLng = state.lng;
+      if (!Array.isArray(state.points)) state.points = [];
+      return state;
     }
 
     return null;
@@ -146,6 +211,27 @@ export class MotionStateService {
     return result[0] ?? null;
   }
 
+  /** Dublikat tekshirish: oxirgi 60s ichida event bormi */
+  private async hasDuplicateEvent(
+    carId: number,
+    type: 'stop' | 'parking',
+    startAt: Date,
+  ): Promise<boolean> {
+    const threshold = new Date(startAt.getTime() - 60_000);
+    const existing = await this.db
+      .select({ id: carStopEvents.id })
+      .from(carStopEvents)
+      .where(
+        and(
+          eq(carStopEvents.carId, carId),
+          eq(carStopEvents.type, type),
+          gte(carStopEvents.startAt, threshold),
+        ),
+      )
+      .limit(1);
+    return existing.length > 0;
+  }
+
   private async createEvent(
     carId: number,
     type: 'stop' | 'parking',
@@ -153,6 +239,28 @@ export class MotionStateService {
     lat: number,
     lng: number,
   ): Promise<number> {
+    // Dublikat tekshirish
+    const isDuplicate = await this.hasDuplicateEvent(carId, type, startAt);
+    if (isDuplicate) {
+      this.logger.warn(
+        `Dublikat ${type} event o'tkazib yuborildi: carId=${carId}`,
+      );
+      // Mavjud eventni qaytarish
+      const existing = await this.db
+        .select({ id: carStopEvents.id })
+        .from(carStopEvents)
+        .where(
+          and(
+            eq(carStopEvents.carId, carId),
+            eq(carStopEvents.type, type),
+            gte(carStopEvents.startAt, new Date(startAt.getTime() - 60_000)),
+          ),
+        )
+        .limit(1);
+      if (existing[0]) return existing[0].id;
+    }
+
+    // Ochiq eventlarni yopish
     const openEvents = await this.db
       .select({ id: carStopEvents.id, startAt: carStopEvents.startAt })
       .from(carStopEvents)
@@ -193,6 +301,18 @@ export class MotionStateService {
     );
   }
 
+  /** Event koordinatasini centroid bilan yangilash */
+  private async updateEventCoordinates(
+    eventId: number,
+    lat: number,
+    lng: number,
+  ): Promise<void> {
+    await this.db
+      .update(carStopEvents)
+      .set({ latitude: lat, longitude: lng })
+      .where(eq(carStopEvents.id, eventId));
+  }
+
   // ─── State Machine ───
 
   private isMoving(state: MotionState, record: GpsRecord): boolean {
@@ -200,9 +320,10 @@ export class MotionStateService {
 
     if (speed > MOTION.SPEED_THRESHOLD) return true;
 
+    // lastLat/lastLng ishlatish (stale koordinata muammosini hal qilish)
     const distance = this.calculateDistance(
-      state.lat,
-      state.lng,
+      state.lastLat,
+      state.lastLng,
       record.lat,
       record.lng,
     );
@@ -221,6 +342,15 @@ export class MotionStateService {
     const recordTime = new Date(record.timestamp);
     const sinceTime = new Date(state.since);
     const elapsedSeconds = (recordTime.getTime() - sinceTime.getTime()) / 1000;
+
+    // GPS ishonchlilik tekshirish
+    if (!this.isReliablePoint(record, state.lastLat, state.lastLng)) {
+      this.logger.debug(
+        `GPS sakrash filtrlandi: carId=${carId}, speed=${record.speed}, ` +
+          `lat=${record.lat}, lng=${record.lng}`,
+      );
+      return state; // ishonchsiz nuqtani o'tkazib yuborish
+    }
 
     if (ignition === false) {
       return this.handleIgnitionOff(
@@ -250,19 +380,33 @@ export class MotionStateService {
   ): Promise<MotionState> {
     const { status } = state;
 
-    // Parking da — hech narsa qilma
+    // Parking da — nuqta qo'shish (centroid yangilanadi)
     if (status === 'parking') {
-      return state;
+      const points = this.addStopPoint(state.points, record);
+      const centroid = this.computeCentroid(points);
+      if (state.eventId) {
+        await this.updateEventCoordinates(state.eventId, centroid.lat, centroid.lng);
+      }
+      return {
+        ...state,
+        points,
+        lat: centroid.lat,
+        lng: centroid.lng,
+        lastLat: record.lat,
+        lastLng: record.lng,
+      };
     }
 
     // Parking candidate — vaqt yetdimi tekshir
     if (status === 'parking_candidate') {
+      const points = this.addStopPoint(state.points, record);
+      const centroid = this.computeCentroid(points);
+
       if (elapsedSeconds >= MOTION.PARKING_THRESHOLD) {
-        // Agar oldingi stop event bor → parking ga upgrade
         if (state.eventId) {
           await this.db
             .update(carStopEvents)
-            .set({ type: 'parking' })
+            .set({ type: 'parking', latitude: centroid.lat, longitude: centroid.lng })
             .where(eq(carStopEvents.id, state.eventId));
 
           this.logger.log(
@@ -272,39 +416,60 @@ export class MotionStateService {
           return {
             status: 'parking',
             since: state.since,
-            lat: state.lat,
-            lng: state.lng,
+            lat: centroid.lat,
+            lng: centroid.lng,
             eventId: state.eventId,
+            lastLat: record.lat,
+            lastLng: record.lng,
+            points,
           };
         }
 
-        // Yangi parking event
         const eventId = await this.createEvent(
           carId,
           'parking',
           new Date(state.since),
-          state.lat,
-          state.lng,
+          centroid.lat,
+          centroid.lng,
         );
         return {
           status: 'parking',
           since: state.since,
-          lat: state.lat,
-          lng: state.lng,
+          lat: centroid.lat,
+          lng: centroid.lng,
           eventId,
+          lastLat: record.lat,
+          lastLng: record.lng,
+          points,
         };
       }
-      return state;
+
+      return {
+        ...state,
+        points,
+        lat: centroid.lat,
+        lng: centroid.lng,
+        lastLat: record.lat,
+        lastLng: record.lng,
+      };
     }
 
-    // ✅ Stopped da ignition off → eventni YOPMA, parking_candidate ga o'tkazish
+    // Stopped da ignition off → parking_candidate ga o'tkazish
     if (status === 'stopped') {
+      const points = this.addStopPoint(state.points, record);
+      const centroid = this.computeCentroid(points);
+      if (state.eventId) {
+        await this.updateEventCoordinates(state.eventId, centroid.lat, centroid.lng);
+      }
       return {
         status: 'parking_candidate',
-        since: state.since, // eski since saqlanadi
-        lat: state.lat, // eski koordinata
-        lng: state.lng,
-        eventId: state.eventId, // ✅ event yopilmaydi, saqlanadi
+        since: state.since,
+        lat: centroid.lat,
+        lng: centroid.lng,
+        eventId: state.eventId,
+        lastLat: record.lat,
+        lastLng: record.lng,
+        points,
       };
     }
 
@@ -312,9 +477,18 @@ export class MotionStateService {
     return {
       status: 'parking_candidate',
       since: recordTime.toISOString(),
-      lat: state.lat, // ✅ oldingi koordinata (GPS jitter emas)
-      lng: state.lng,
+      lat: state.lastLat, // oxirgi ishonchli koordinata
+      lng: state.lastLng,
       eventId: null,
+      lastLat: record.lat,
+      lastLng: record.lng,
+      points: [
+        {
+          lat: record.lat,
+          lng: record.lng,
+          recordedAt: recordTime.toISOString(),
+        },
+      ],
     };
   }
 
@@ -327,42 +501,104 @@ export class MotionStateService {
   ): Promise<MotionState> {
     const { status } = state;
 
-    // ✅ parking VA stopped da — hech narsa qilma, davom etsin
-    if (status === 'stopped' || status === 'parking') {
-      return state;
+    // Stopped da — nuqtalar yig'ish, centroid yangilash
+    if (status === 'stopped') {
+      const points = this.addStopPoint(state.points, record);
+      const centroid = this.computeCentroid(points);
+      if (state.eventId) {
+        await this.updateEventCoordinates(state.eventId, centroid.lat, centroid.lng);
+      }
+      return {
+        ...state,
+        points,
+        lat: centroid.lat,
+        lng: centroid.lng,
+        lastLat: record.lat,
+        lastLng: record.lng,
+      };
+    }
+
+    // Parking da — nuqtalar yig'ish
+    if (status === 'parking') {
+      const points = this.addStopPoint(state.points, record);
+      const centroid = this.computeCentroid(points);
+      if (state.eventId) {
+        await this.updateEventCoordinates(state.eventId, centroid.lat, centroid.lng);
+      }
+      return {
+        ...state,
+        points,
+        lat: centroid.lat,
+        lng: centroid.lng,
+        lastLat: record.lat,
+        lastLng: record.lng,
+      };
     }
 
     if (status === 'stop_candidate') {
+      const points = this.addStopPoint(state.points, record);
+      const centroid = this.computeCentroid(points);
+
       if (elapsedSeconds >= MOTION.STOP_THRESHOLD) {
         const eventId = await this.createEvent(
           carId,
           'stop',
           new Date(state.since),
-          state.lat,
-          state.lng,
+          centroid.lat,
+          centroid.lng,
         );
         return {
           status: 'stopped',
           since: state.since,
-          lat: state.lat,
-          lng: state.lng,
+          lat: centroid.lat,
+          lng: centroid.lng,
           eventId,
+          lastLat: record.lat,
+          lastLng: record.lng,
+          points,
         };
       }
-      return state;
+
+      return {
+        ...state,
+        points,
+        lat: centroid.lat,
+        lng: centroid.lng,
+        lastLat: record.lat,
+        lastLng: record.lng,
+      };
     }
 
-    // parking_candidate da speed past → davom etsin
+    // parking_candidate da speed past → nuqta yig'ish
     if (status === 'parking_candidate') {
-      return state;
+      const points = this.addStopPoint(state.points, record);
+      const centroid = this.computeCentroid(points);
+      return {
+        ...state,
+        points,
+        lat: centroid.lat,
+        lng: centroid.lng,
+        lastLat: record.lat,
+        lastLng: record.lng,
+      };
     }
 
+    // Moving → stop_candidate (lastLat ishlatish — stop_candidate boshlanish nuqtasi)
     return {
       status: 'stop_candidate',
       since: recordTime.toISOString(),
-      lat: record.lat,
-      lng: record.lng,
+      lat: state.lastLat,
+      lng: state.lastLng,
       eventId: null,
+      lastLat: record.lat,
+      lastLng: record.lng,
+      points: [
+        {
+          lat: record.lat,
+          lng: record.lng,
+          recordedAt: recordTime.toISOString(),
+        },
+      ],
     };
   }
 
@@ -375,25 +611,34 @@ export class MotionStateService {
     const { status } = state;
 
     if (status === 'moving') {
-      return state;
+      // lastLat/lastLng yangilash
+      return {
+        ...state,
+        lastLat: record.lat,
+        lastLng: record.lng,
+      };
     }
 
-    // ✅ Grace period: parking/stopped dan chiqishda tekshirish
+    // Grace period: parking/stopped dan chiqishda tekshirish
     if (status === 'parking' || status === 'stopped') {
       const speed = record.speed ?? 0;
       const distance = this.calculateDistance(
-        state.lat,
-        state.lng,
+        state.lastLat,
+        state.lastLng,
         record.lat,
         record.lng,
       );
 
       // Speed < 20 va distance < 100m → jitter, davom etsin
       if (speed < 20 && distance < 100) {
-        return state;
+        return {
+          ...state,
+          lastLat: record.lat,
+          lastLng: record.lng,
+        };
       }
 
-      // Haqiqiy harakat — event yopiladi
+      // Haqiqiy harakat — event yopiladi, oxirgi centroid saqlanadi
       if (state.eventId) {
         await this.closeEvent(state.eventId, recordTime, new Date(state.since));
       }
@@ -401,7 +646,6 @@ export class MotionStateService {
 
     // parking_candidate / stop_candidate dan chiqish
     if (status === 'parking_candidate' || status === 'stop_candidate') {
-      // Agar oldingi event bor va yopilmagan → yopish
       if (state.eventId) {
         await this.closeEvent(state.eventId, recordTime, new Date(state.since));
       }
@@ -413,6 +657,9 @@ export class MotionStateService {
       lat: record.lat,
       lng: record.lng,
       eventId: null,
+      lastLat: record.lat,
+      lastLng: record.lng,
+      points: [],
     };
   }
 
@@ -454,11 +701,14 @@ export class MotionStateService {
           state.status === 'parking_candidate' &&
           elapsedSeconds >= MOTION.PARKING_THRESHOLD
         ) {
+          const centroid = this.computeCentroid(state.points);
+          const lat = state.points.length > 0 ? centroid.lat : state.lat;
+          const lng = state.points.length > 0 ? centroid.lng : state.lng;
+
           if (state.eventId) {
-            // Stop → Parking upgrade
             await this.db
               .update(carStopEvents)
-              .set({ type: 'parking' })
+              .set({ type: 'parking', latitude: lat, longitude: lng })
               .where(eq(carStopEvents.id, state.eventId));
 
             this.logger.log(
@@ -468,24 +718,30 @@ export class MotionStateService {
             newState = {
               status: 'parking',
               since: state.since,
-              lat: state.lat,
-              lng: state.lng,
+              lat,
+              lng,
               eventId: state.eventId,
+              lastLat: state.lastLat,
+              lastLng: state.lastLng,
+              points: state.points,
             };
           } else {
             const eventId = await this.createEvent(
               carId,
               'parking',
               new Date(state.since),
-              state.lat,
-              state.lng,
+              lat,
+              lng,
             );
             newState = {
               status: 'parking',
               since: state.since,
-              lat: state.lat,
-              lng: state.lng,
+              lat,
+              lng,
               eventId,
+              lastLat: state.lastLat,
+              lastLng: state.lastLng,
+              points: state.points,
             };
           }
         }
@@ -494,19 +750,26 @@ export class MotionStateService {
           state.status === 'stop_candidate' &&
           elapsedSeconds >= MOTION.STOP_THRESHOLD
         ) {
+          const centroid = this.computeCentroid(state.points);
+          const lat = state.points.length > 0 ? centroid.lat : state.lat;
+          const lng = state.points.length > 0 ? centroid.lng : state.lng;
+
           const eventId = await this.createEvent(
             carId,
             'stop',
             new Date(state.since),
-            state.lat,
-            state.lng,
+            lat,
+            lng,
           );
           newState = {
             status: 'stopped',
             since: state.since,
-            lat: state.lat,
-            lng: state.lng,
+            lat,
+            lng,
             eventId,
+            lastLat: state.lastLat,
+            lastLng: state.lastLng,
+            points: state.points,
           };
         }
 
@@ -526,7 +789,6 @@ export class MotionStateService {
   // ─── Public API ───
 
   async processRecords(carId: number, records: GpsRecord[]): Promise<void> {
-    // Active car listga qo'shish
     await this.addActiveCar(carId);
 
     let state = await this.getState(carId);
@@ -539,6 +801,9 @@ export class MotionStateService {
         lat: first.lat,
         lng: first.lng,
         eventId: null,
+        lastLat: first.lat,
+        lastLng: first.lng,
+        points: [],
       };
       this.logger.log(`Yangi state: carId=${carId}, status=moving`);
     }
