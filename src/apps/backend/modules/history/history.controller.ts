@@ -6,6 +6,7 @@ import {
   CarRouteWithEventsDto,
 } from './history.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Public } from '@/shared/decarators/public.decorator';
 
 @ApiBearerAuth()
 @ApiTags('History')
@@ -23,6 +24,7 @@ export class HistoryController {
     return this.historyService.getCarRoute(dto);
   }
 
+  @Public()
   @Get('route-with-events')
   async getRouteWithEvents(@Query() dto: CarRouteWithEventsDto) {
     return this.historyService.getCarRouteWithEvents(
@@ -38,6 +40,7 @@ export class HistoryController {
   }
 
   /** Diagnostika: qaysi filter qancha nuqtani yo'q qilayotganini ko'rsatadi */
+  @Public()
   @Get('diagnose-filters')
   async diagnoseFilters(@Query() dto: CarRouteWithEventsDto) {
     return this.historyService.diagnosRouteFilters(

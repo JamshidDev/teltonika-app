@@ -26,6 +26,8 @@ interface RoutePoint {
 interface TimelineRoute {
   type: 'route';
   points: RoutePoint[];
+  startPoint: { lat: number; lng: number }; // A nuqta (route boshlanishi)
+  endPoint: { lat: number; lng: number }; // B nuqta (route tugashi)
   distance: number;
   confidence: number; // 0-1 GPS sifat ko'rsatkichi
 }
@@ -274,8 +276,14 @@ export class HistoryService {
   // ─── Route query ───
 
   /**
-   * Route nuqtalarini olish — ignition = true YOKI speed >= 5 (towing/external movement).
-   * Strict ignition dependency olib tashlandi — harakat speed orqali aniqlanadi.
+   * Route nuqtalarini olish.
+   *
+   * Speed filter OLIB TASHLANDI — sabab:
+   * - speed >= 2 parking yaqinidagi sekin nuqtalarni chiqarib tashlar edi
+   * - Bu Route B → Parking orasida 2-8 km gap hosil qilar edi
+   * - Buning o'rniga filterRouteChain (minDistance) sekin/to'xtagan nuqtalarni filtrlaydi
+   *
+   * Ignition filter yengilroq: ignition=true YOKI speed > 0 (har qanday harakat)
    */
   private async queryRoutePoints(
     carId: number,
@@ -293,7 +301,6 @@ export class HistoryService {
         AND recorded_at BETWEEN ${from} AND ${to}
         AND latitude != 0 AND longitude != 0
         AND (ignition = true OR speed >= ${MOTION.NO_IGNITION_MIN_SPEED})
-        AND speed >= ${this.routeConfig.minSpeed}
         AND satellites >= ${MOTION.MIN_SATELLITES}
       ORDER BY recorded_at ASC
     `);
@@ -582,7 +589,26 @@ export class HistoryService {
         pointIndex++;
       }
 
+      // Route → Event connector: route oxirgi nuqtasi eventdan uzoq bo'lsa,
+      // event koordinatasini route oxiriga qo'shib, uzluksiz polyline hosil qilish
       if (segment.length >= 1) {
+        const lastPt = segment[segment.length - 1];
+        const gapToEvent = this.calculateDistance(
+          lastPt.lat,
+          lastPt.lng,
+          event.lat,
+          event.lng,
+        );
+        if (gapToEvent > 100 && gapToEvent < 10000) {
+          // Event nuqtasini route oxiriga connector sifatida qo'shish
+          segment.push({
+            lat: event.lat,
+            lng: event.lng,
+            speed: 0,
+            angle: lastPt.angle,
+            recordedAt: event.startAt,
+          });
+        }
         this.pushRouteSegment(timeline, segment);
       }
 
@@ -623,6 +649,34 @@ export class HistoryService {
           pointIndex++;
         }
       }
+
+      // Event → keyingi Route connector: agar keyingi route nuqtasi uzoq bo'lsa,
+      // event koordinatasini keyingi segmentning boshiga qo'shish
+      if (
+        event.endAt &&
+        pointIndex < points.length
+      ) {
+        const nextPt = points[pointIndex];
+        const gapFromEvent = this.calculateDistance(
+          event.lat,
+          event.lng,
+          nextPt.lat,
+          nextPt.lng,
+        );
+        if (gapFromEvent > 100 && gapFromEvent < 10000) {
+          // Keyingi segment oldiga event nuqtasini qo'shish
+          // (pointIndex o'zgarmaydi — segment loop da yig'iladi)
+          points.splice(pointIndex, 0, {
+            lat: event.lat,
+            lng: event.lng,
+            speed: 0,
+            angle: nextPt.angle,
+            recordedAt: event.endAt,
+          } as RoutePoint);
+          // routeTimes ni ham yangilash
+          routeTimes.splice(pointIndex, 0, event.endAt.getTime());
+        }
+      }
     }
 
     // Oxirgi eventdan keyingi qolgan nuqtalar
@@ -632,7 +686,27 @@ export class HistoryService {
       pointIndex++;
     }
 
-    if (remaining.length >= 1) {
+    // Event → Route connector: oxirgi eventdan qolgan nuqtalar uchun
+    if (remaining.length >= 1 && sortedEvents.length > 0) {
+      const lastEvent = sortedEvents[sortedEvents.length - 1];
+      const firstRemaining = remaining[0];
+      const gapFromEvent = this.calculateDistance(
+        lastEvent.lat,
+        lastEvent.lng,
+        firstRemaining.lat,
+        firstRemaining.lng,
+      );
+      if (gapFromEvent > 100 && gapFromEvent < 10000 && lastEvent.endAt) {
+        remaining.unshift({
+          lat: lastEvent.lat,
+          lng: lastEvent.lng,
+          speed: 0,
+          angle: firstRemaining.angle,
+          recordedAt: lastEvent.endAt,
+        });
+      }
+      this.pushRouteSegment(timeline, remaining);
+    } else if (remaining.length >= 1) {
       this.pushRouteSegment(timeline, remaining);
     }
 
@@ -661,35 +735,49 @@ export class HistoryService {
 
   /**
    * Route segmentni timeline'ga qo'shish.
-   * Pipeline: chain filter → jitter smooth → endpoint smooth → simplify
+   * Pipeline: jitter smooth → simplify (chain filter QILINMAYDI — allaqachon filtered)
+   *
+   * MUHIM: Segment nuqtalari buildTimeline dan keladi — ular allaqachon
+   * filterRouteChain orqali o'tgan. Qayta filter qilish XATO — chunki
+   * timeline split dan keyin segmentdagi birinchi nuqta oldingi segmentning
+   * oxirgi nuqtasidan uzoq bo'lishi mumkin (event orasidagi masofa).
    */
   private pushRouteSegment(
     timeline: TimelineItem[],
     segment: RoutePoint[],
   ): void {
+    if (segment.length === 0) return;
+
+    // A va B nuqtalar — RAW (smooth qilinmagan) birinchi va oxirgi nuqta
+    const startPoint = { lat: segment[0].lat, lng: segment[0].lng };
+    const endPoint = {
+      lat: segment[segment.length - 1].lat,
+      lng: segment[segment.length - 1].lng,
+    };
+
     if (segment.length === 1) {
       timeline.push({
         type: 'route',
         points: segment,
+        startPoint,
+        endPoint,
         distance: 0,
-        confidence: 0.3, // bitta nuqta = past ishonch
+        confidence: 0.3,
       });
       return;
     }
 
-    // Pipeline: chain → jitter → endpoint smooth → simplify
-    const chained = this.filterRouteChain(segment);
-    if (chained.length === 0) return;
-
-    const jitterSmoothed = this.smoothJitter(chained);
-    const endpointSmoothed = this.smoothRouteEndpoints(jitterSmoothed);
-    const simplified = this.simplifyRoute(endpointSmoothed);
-    const confidence = this.computeRouteConfidence(endpointSmoothed);
+    // Pipeline: jitter → simplify (chain filter YO'Q)
+    const jitterSmoothed = this.smoothJitter(segment);
+    const simplified = this.simplifyRoute(jitterSmoothed);
+    const confidence = this.computeRouteConfidence(jitterSmoothed);
 
     timeline.push({
       type: 'route',
       points: simplified,
-      distance: this.calculateSegmentDistanceKm(endpointSmoothed),
+      startPoint,
+      endPoint,
+      distance: this.calculateSegmentDistanceKm(jitterSmoothed),
       confidence,
     });
   }
