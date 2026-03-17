@@ -625,7 +625,9 @@ export class MotionStateService {
       };
     }
 
-    // Grace period: parking/stopped dan chiqishda tekshirish
+    // Grace period: parking/stopped dan chiqishda kuchaytirilgan tekshirish
+    // Muammo: ignition on → GPS jitter → moving → ignition off → yangi parking = dublikat
+    // Yechim: speed VA distance IKKALASI ham yuqori bo'lishi kerak
     if (status === 'parking' || status === 'stopped') {
       const speed = record.speed ?? 0;
       const distance = this.calculateDistance(
@@ -635,16 +637,26 @@ export class MotionStateService {
         record.lng,
       );
 
-      // Speed < 20 va distance < 100m → jitter, davom etsin
-      if (speed < 20 && distance < 100) {
+      // Kuchaytirilgan grace: speed < 25 YOKI distance < 150m → jitter, davom etsin
+      // Oldingi: speed < 20 AND distance < 100 (juda qat'iy)
+      // Yangi: speed < 25 OR distance < 150 (keng grace — bir jitter ham o'tkazib yubormaydi)
+      if (speed < MOTION.MOVING_GRACE_SPEED || distance < MOTION.MOVING_GRACE_DISTANCE) {
+        const points = this.addStopPoint(state.points, record);
+        const centroid = this.computeCentroid(points);
+        if (state.eventId) {
+          await this.updateEventCoordinates(state.eventId, centroid.lat, centroid.lng);
+        }
         return {
           ...state,
+          points,
+          lat: centroid.lat,
+          lng: centroid.lng,
           lastLat: record.lat,
           lastLng: record.lng,
         };
       }
 
-      // Haqiqiy harakat — event yopiladi, oxirgi centroid saqlanadi
+      // Haqiqiy harakat — speed >= 25 VA distance >= 150m
       if (state.eventId) {
         await this.closeEvent(state.eventId, recordTime, new Date(state.since));
       }

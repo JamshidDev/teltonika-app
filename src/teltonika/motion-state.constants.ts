@@ -19,6 +19,15 @@ export const MOTION = {
 
   // Route: ignition off da harakatni aniqlash (towing)
   NO_IGNITION_MIN_SPEED: 5, // km/h — ignition off da bundan yuqori tezlik = haqiqiy harakat
+
+  // Event merging — bir xil joydagi ketma-ket eventlarni birlashtirish
+  MERGE_MAX_GAP: 600, // sekund (10 min) — bir lokatsiyada gap bundan kam bo'lsa merge
+  MERGE_MAX_DISTANCE: 200, // metr — eventlar orasidagi masofa bundan kam = bir joy
+  MERGE_SHORT_GAP: 120, // sekund (2 min) — qisqa gap = lokatsiyadan mustaqil merge
+
+  // Grace period: parking/stopped dan moving ga o'tishda sabr
+  MOVING_GRACE_SPEED: 25, // km/h — bundan past tezlik = hali aniq harakat emas
+  MOVING_GRACE_DISTANCE: 150, // metr — bundan kam masofa = hali joyidan chiqmagan
 } as const;
 
 export type MotionStatus =

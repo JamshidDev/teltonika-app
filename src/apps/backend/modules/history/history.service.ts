@@ -732,7 +732,16 @@ export class HistoryService {
 
   // ─── Event merging ───
 
-  /** Ketma-ket eventlarni birlashtirish (orasida route nuqtasi bo'lmasa, <60s gap) */
+  /**
+   * Ketma-ket eventlarni birlashtirish — lokatsiya-aware.
+   *
+   * Merge strategiyasi (3 darajali):
+   * 1. Qisqa gap (< 120s) → doim merge (lokatsiyadan mustaqil)
+   * 2. O'rta gap (< 600s) + bir lokatsiya (< 200m) → merge
+   * 3. Uzun gap (600s+) yoki uzoq lokatsiya → merge QILINMAYDI
+   *
+   * Bu tarzda bir joyda qayta-qayta ignition on/off qilish → bitta event bo'ladi.
+   */
   private mergeConsecutiveEvents(
     events: {
       type: string | null;
@@ -746,7 +755,6 @@ export class HistoryService {
   ) {
     if (events.length <= 1) return events;
 
-    // Performance: route vaqtlarini sorted array qilib, binary search ishlatish
     const routeTimes = routePoints.map((p) => new Date(p.recordedAt).getTime());
 
     const merged: typeof events = [];
@@ -763,29 +771,101 @@ export class HistoryService {
         ? (event.startAt.getTime() - prev.endAt.getTime()) / 1000
         : 0;
 
-      // Binary search: oradagi route nuqtasi bormi
-      const hasRouteBetween =
-        prev.endAt &&
-        this.hasRoutePointBetween(
-          routeTimes,
-          prev.endAt.getTime(),
-          event.startAt.getTime(),
-        );
+      // Ikki event orasidagi masofa
+      const distance =
+        prev.lat !== null &&
+        prev.lng !== null &&
+        event.lat !== null &&
+        event.lng !== null
+          ? this.calculateDistance(prev.lat, prev.lng, event.lat, event.lng)
+          : Infinity;
 
-      if (gap <= 60 && !hasRouteBetween) {
+      // Oradagi route nuqtalarida haqiqiy harakat bormi
+      const hasSignificantRoute = this.hasSignificantRouteBetween(
+        routePoints,
+        routeTimes,
+        prev.endAt?.getTime() ?? prev.startAt.getTime(),
+        event.startAt.getTime(),
+      );
+
+      // Merge qaror:
+      const shouldMerge =
+        // 1) Juda qisqa gap — noise (ignition bounce)
+        (gap <= MOTION.MERGE_SHORT_GAP && !hasSignificantRoute) ||
+        // 2) O'rta gap + bir lokatsiya — bir joyda qayta parking
+        (gap <= MOTION.MERGE_MAX_GAP &&
+          distance <= MOTION.MERGE_MAX_DISTANCE);
+
+      if (shouldMerge) {
+        // Merge: prev event ni kengaytirish
         prev.endAt = event.endAt;
         prev.durationSeconds = prev.endAt
           ? Math.floor(
               (prev.endAt.getTime() - prev.startAt.getTime()) / 1000,
             )
           : null;
+        // Agar biri parking bo'lsa, merged ham parking
         if (event.type === 'parking') prev.type = 'parking';
+        // Centroid yangilash (ikki nuqtaning o'rtasi)
+        if (
+          prev.lat !== null &&
+          prev.lng !== null &&
+          event.lat !== null &&
+          event.lng !== null
+        ) {
+          prev.lat = (prev.lat + event.lat) / 2;
+          prev.lng = (prev.lng + event.lng) / 2;
+        }
       } else {
         merged.push({ ...event });
       }
     }
 
     return merged;
+  }
+
+  /**
+   * Ikki vaqt orasida HAQIQIY harakat bormi (nafaqat nuqta, balki masofa).
+   * Agar route nuqtalari orasida 200m+ masofa bo'lsa = haqiqiy harakat.
+   * Agar faqat GPS jitter bo'lsa = harakat emas.
+   */
+  private hasSignificantRouteBetween(
+    routePoints: RoutePoint[],
+    routeTimes: number[],
+    afterMs: number,
+    beforeMs: number,
+  ): boolean {
+    // Binary search: afterMs dan keyingi birinchi nuqtani topish
+    let lo = 0;
+    let hi = routeTimes.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (routeTimes[mid] <= afterMs) lo = mid + 1;
+      else hi = mid;
+    }
+
+    // Oradagi nuqtalarni yig'ish
+    const betweenPoints: RoutePoint[] = [];
+    for (let i = lo; i < routePoints.length; i++) {
+      if (routeTimes[i] >= beforeMs) break;
+      betweenPoints.push(routePoints[i]);
+    }
+
+    if (betweenPoints.length < 2) return false;
+
+    // Umumiy masofa hisoblash
+    let totalDistance = 0;
+    for (let i = 1; i < betweenPoints.length; i++) {
+      totalDistance += this.calculateDistance(
+        betweenPoints[i - 1].lat,
+        betweenPoints[i - 1].lng,
+        betweenPoints[i].lat,
+        betweenPoints[i].lng,
+      );
+    }
+
+    // 200m+ = haqiqiy harakat
+    return totalDistance > MOTION.MERGE_MAX_DISTANCE;
   }
 
   /**
