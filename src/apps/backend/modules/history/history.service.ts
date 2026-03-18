@@ -1108,18 +1108,21 @@ export class HistoryService {
         bytesFormatted: this.formatBytes(stats.bytes),
       }));
 
+    // Car ma'lumoti
+    const carRow = await this.db
+      .select({ name: cars.name, carNumber: cars.carNumber })
+      .from(cars)
+      .where(eq(cars.id, carId))
+      .limit(1);
+    const car = carRow[0] ?? null;
+
     return {
-      carId,
-      from,
-      to,
+      car: car ? { id: carId, name: car.name, carNumber: car.carNumber } : null,
       device: device
         ? { id: device.deviceId, imei: device.imei, model: device.model }
         : null,
-      totalRows,
       totalBytes,
       totalFormatted: this.formatBytes(totalBytes),
-      avgBytesPerRow: totalRows > 0 ? Math.round(totalBytes / totalRows) : 0,
-      hourly: hourlyStats,
     };
   }
 
