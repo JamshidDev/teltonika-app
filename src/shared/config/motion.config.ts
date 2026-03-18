@@ -1,58 +1,46 @@
-import { Configuration, Value } from '@itgorillaz/configify';
+import { Injectable } from '@nestjs/common';
 
-@Configuration()
+@Injectable()
 export class MotionConfig {
   // ─── State machine thresholds ───
 
   /** Radius (metr) — shu ichida tursa "qimirlamagan" hisoblanadi */
-  @Value('MOTION_RADIUS')
-  radius: number = 50;
+  radius: number = Number(process.env.MOTION_RADIUS) || 50;
 
   /** Speed (km/h) — bundan past = to'xtagan */
-  @Value('MOTION_SPEED_THRESHOLD')
-  speedThreshold: number = 5;
+  speedThreshold: number = Number(process.env.MOTION_SPEED_THRESHOLD) || 5;
 
   /** Ketma-ket data soni — o'tish uchun kerak */
-  @Value('MOTION_CONSECUTIVE_COUNT')
-  consecutiveCount: number = 5;
+  consecutiveCount: number = Number(process.env.MOTION_CONSECUTIVE_COUNT) || 5;
 
   /** Stop timer (sekund) — STOP_PENDING → STOPPED */
-  @Value('MOTION_STOP_TIMEOUT')
-  stopTimeout: number = 600; // 10 daqiqa
+  stopTimeout: number = Number(process.env.MOTION_STOP_TIMEOUT) || 600;
 
   /** Parking timer (sekund) — PARKING_PENDING → PARKING */
-  @Value('MOTION_PARKING_TIMEOUT')
-  parkingTimeout: number = 300; // 5 daqiqa
+  parkingTimeout: number = Number(process.env.MOTION_PARKING_TIMEOUT) || 300;
 
   /** Moving timer (sekund) — STOPPED/PARKING → MOVING */
-  @Value('MOTION_MOVING_TIMEOUT')
-  movingTimeout: number = 120; // 2 daqiqa
+  movingTimeout: number = Number(process.env.MOTION_MOVING_TIMEOUT) || 120;
 
   // ─── GPS filters ───
 
   /** Max tezlik (km/h) — bundan katta = noto'g'ri GPS */
-  @Value('MOTION_MAX_SPEED')
-  maxSpeed: number = 200;
+  maxSpeed: number = Number(process.env.MOTION_MAX_SPEED) || 200;
 
   /** Min satellite soni — kamroq bo'lsa GPS signal yomon */
-  @Value('MOTION_MIN_SATELLITES')
-  minSatellites: number = 4;
+  minSatellites: number = Number(process.env.MOTION_MIN_SATELLITES) || 4;
 
   /** Max HDOP — yuqori bo'lsa GPS aniqlik past */
-  @Value('MOTION_MAX_HDOP')
-  maxHdop: number = 5;
+  maxHdop: number = Number(process.env.MOTION_MAX_HDOP) || 5;
 
   /** GPS sakrash chegarasi (metr) — bundan katta = ishonchsiz nuqta */
-  @Value('MOTION_GPS_JUMP_THRESHOLD')
-  gpsJumpThreshold: number = 300;
+  gpsJumpThreshold: number = Number(process.env.MOTION_GPS_JUMP_THRESHOLD) || 300;
 
   // ─── Redis ───
 
   /** Redis key prefix */
-  @Value('MOTION_REDIS_PREFIX')
-  redisPrefix: string = 'motion';
+  redisPrefix: string = process.env.MOTION_REDIS_PREFIX || 'motion';
 
   /** Redis TTL (sekund) — state qancha vaqt saqlanadi */
-  @Value('MOTION_REDIS_TTL')
-  redisTtl: number = 86400; // 24 soat
+  redisTtl: number = Number(process.env.MOTION_REDIS_TTL) || 86400;
 }
