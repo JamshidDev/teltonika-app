@@ -5,10 +5,11 @@ import {
   carPositions,
   cars,
   carStopEvents,
+  carDevices,
   devices,
   drivers,
 } from '@/shared/database/schema';
-import { and, between, count, desc, eq, or, sql } from 'drizzle-orm';
+import { and, between, count, desc, eq, isNull, or, sql } from 'drizzle-orm';
 import { CarHistoryDto, CarRouteDto } from './history.dto';
 import simplify from '@turf/simplify';
 import { lineString } from '@turf/helpers';
@@ -1049,6 +1050,26 @@ export class HistoryService {
     const fromDate = new Date(from);
     const toDate = new Date(to);
 
+    // carId dan aktiv deviceId ni topish
+    const deviceRow = await this.db
+      .select({
+        deviceId: carDevices.deviceId,
+        imei: devices.imei,
+        model: devices.model,
+      })
+      .from(carDevices)
+      .innerJoin(devices, eq(carDevices.deviceId, devices.id))
+      .where(
+        and(
+          eq(carDevices.carId, carId),
+          isNull(carDevices.endAt),
+        ),
+      )
+      .limit(1);
+
+    const device = deviceRow[0] ?? null;
+
+    // car_positions dan trafik hisoblash
     const rows = await this.db
       .select({
         bytesReceived: carPositions.bytesReceived,
@@ -1072,7 +1093,6 @@ export class HistoryService {
       totalBytes += bytes;
       totalRows++;
 
-      // Soatlik statistika
       const hour = new Date(row.recordedAt).toISOString().slice(0, 13) + ':00';
       if (!hourly[hour]) hourly[hour] = { bytes: 0, rows: 0 };
       hourly[hour].bytes += bytes;
@@ -1092,6 +1112,9 @@ export class HistoryService {
       carId,
       from,
       to,
+      device: device
+        ? { id: device.deviceId, imei: device.imei, model: device.model }
+        : null,
       totalRows,
       totalBytes,
       totalFormatted: this.formatBytes(totalBytes),
