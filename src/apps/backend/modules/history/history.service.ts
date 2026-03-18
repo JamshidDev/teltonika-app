@@ -1043,6 +1043,70 @@ export class HistoryService {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
+  // ─── Traffic stats ───
+
+  async getTrafficStats(carId: number, from: string, to: string) {
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+
+    const rows = await this.db
+      .select({
+        bytesReceived: carPositions.bytesReceived,
+        recordedAt: carPositions.recordedAt,
+      })
+      .from(carPositions)
+      .where(
+        and(
+          eq(carPositions.carId, carId),
+          between(carPositions.recordedAt, fromDate, toDate),
+        ),
+      )
+      .orderBy(carPositions.recordedAt);
+
+    let totalBytes = 0;
+    let totalRows = 0;
+    const hourly: Record<string, { bytes: number; rows: number }> = {};
+
+    for (const row of rows) {
+      const bytes = row.bytesReceived ?? 0;
+      totalBytes += bytes;
+      totalRows++;
+
+      // Soatlik statistika
+      const hour = new Date(row.recordedAt).toISOString().slice(0, 13) + ':00';
+      if (!hourly[hour]) hourly[hour] = { bytes: 0, rows: 0 };
+      hourly[hour].bytes += bytes;
+      hourly[hour].rows++;
+    }
+
+    const hourlyStats = Object.entries(hourly)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([hour, stats]) => ({
+        hour,
+        bytes: stats.bytes,
+        rows: stats.rows,
+        bytesFormatted: this.formatBytes(stats.bytes),
+      }));
+
+    return {
+      carId,
+      from,
+      to,
+      totalRows,
+      totalBytes,
+      totalFormatted: this.formatBytes(totalBytes),
+      avgBytesPerRow: totalRows > 0 ? Math.round(totalBytes / totalRows) : 0,
+      hourly: hourlyStats,
+    };
+  }
+
+  private formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+  }
+
   private calculateSegmentDistanceKm(points: RoutePoint[]): number {
     if (points.length < 2) return 0;
     let totalMeters = 0;

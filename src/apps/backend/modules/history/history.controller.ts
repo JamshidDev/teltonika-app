@@ -50,6 +50,11 @@ export class HistoryController {
     );
   }
 
+  @Get('traffic')
+  async getTrafficStats(@Query() dto: CarRouteWithEventsDto) {
+    return this.historyService.getTrafficStats(dto.carId, dto.from, dto.to);
+  }
+
   @Get('route/geojson')
   async getCarRouteGeoJson(@Query() dto: CarRouteDto) {
     const data = await this.historyService.getCarRoute(dto);
