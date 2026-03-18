@@ -6,6 +6,7 @@ import {
   cars,
   carStopEvents,
   carDevices,
+  carDrivers,
   devices,
   drivers,
 } from '@/shared/database/schema';
@@ -1116,10 +1117,31 @@ export class HistoryService {
       .limit(1);
     const car = carRow[0] ?? null;
 
+    // Aktiv haydovchi
+    const driverRow = await this.db
+      .select({
+        driverId: carDrivers.driverId,
+        fullName: drivers.fullName,
+        phone: drivers.phone,
+      })
+      .from(carDrivers)
+      .innerJoin(drivers, eq(carDrivers.driverId, drivers.id))
+      .where(
+        and(
+          eq(carDrivers.carId, carId),
+          isNull(carDrivers.endAt),
+        ),
+      )
+      .limit(1);
+    const driver = driverRow[0] ?? null;
+
     return {
       car: car ? { id: carId, name: car.name, carNumber: car.carNumber } : null,
       device: device
         ? { id: device.deviceId, imei: device.imei, model: device.model }
+        : null,
+      driver: driver
+        ? { id: driver.driverId, fullName: driver.fullName, phone: driver.phone }
         : null,
       totalBytes,
       totalFormatted: this.formatBytes(totalBytes),
