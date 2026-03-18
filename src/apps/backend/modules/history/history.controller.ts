@@ -5,7 +5,7 @@ import {
   CarRouteDto,
   CarRouteWithEventsDto,
 } from './history.dto';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '@/shared/decarators/public.decorator';
 
 @ApiBearerAuth()
@@ -50,6 +50,7 @@ export class HistoryController {
     );
   }
 
+  @ApiOperation({ summary: 'Device traffic stats — car, device, driver, total bytes' })
   @Get('traffic')
   async getTrafficStats(@Query() dto: CarRouteWithEventsDto) {
     return this.historyService.getTrafficStats(dto.carId, dto.from, dto.to);
