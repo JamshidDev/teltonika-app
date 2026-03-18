@@ -554,9 +554,10 @@ export class MotionStateService {
         movingTimerStart = timeStr;
       }
 
+      const movingElapsedDbg = (time.getTime() - new Date(movingTimerStart).getTime()) / 1000;
       this.logger.debug(
         `[STOPPED→MOVING] carId=${carId}: count=${newCount}/${this.config.consecutiveCount}, ` +
-          `movingTimer=${movingTimerStart}`,
+          `elapsed=${movingElapsedDbg.toFixed(0)}s/${this.config.movingTimeout}s, timer=${movingTimerStart}`,
       );
 
       if (newCount >= this.config.consecutiveCount) {
