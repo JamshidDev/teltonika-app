@@ -132,6 +132,9 @@ export class TeltonikaService implements OnModuleInit {
             deviceId: session.deviceId!,
             records: parsed.records,
             bytesReceived: packet.length,
+          }, {
+            removeOnComplete: 100,  // oxirgi 100 ta completed job saqlash
+            removeOnFail: 50,       // oxirgi 50 ta failed job saqlash
           });
         }
 
