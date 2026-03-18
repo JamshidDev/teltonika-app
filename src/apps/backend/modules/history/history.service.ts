@@ -329,12 +329,13 @@ export class HistoryService {
         curr.lng,
       );
 
-      if (
-        distance >= this.routeConfig.minDistance &&
-        distance <= this.routeConfig.maxDistance
-      ) {
+      if (distance >= this.routeConfig.minDistance && distance <= this.routeConfig.maxDistance) {
+        result.push(curr);
+      } else if (distance > this.routeConfig.maxDistance) {
+        // Katta sakrash — yangi chain boshlash (teleport/uzun parking)
         result.push(curr);
       }
+      // distance < minDistance → skip (jitter)
     }
 
     return result;
