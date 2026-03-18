@@ -5,13 +5,10 @@ import { Cron } from '@nestjs/schedule';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
 import { cars, carStopEvents } from '@/shared/database/schema';
-import { and, eq, gte, isNull } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { GpsRecord } from './codec8.parser';
-import {
-  MOTION,
-  MotionState,
-  StopPoint,
-} from './motion-state.constants';
+import { MotionState, MotionStatus } from './motion-state.constants';
+import { MotionConfig } from '@/shared/config/motion.config';
 import { TrackingGateway } from '@/shared/gateway/tracking.gateway';
 
 const ACTIVE_CARS_KEY = 'motion:active';
@@ -23,16 +20,18 @@ export class MotionStateService {
   constructor(
     @Inject(CACHE_MANAGER) private cache: Cache,
     @InjectDb() private db: DataSource,
+    private readonly config: MotionConfig,
     private readonly trackingGateway: TrackingGateway,
   ) {}
 
   // ─── Helpers ───
 
   private redisKey(carId: number): string {
-    return `${MOTION.REDIS_PREFIX}:${carId}`;
+    return `${this.config.redisPrefix}:${carId}`;
   }
 
-  private calculateDistance(
+  /** Haversine — 2 nuqta orasidagi masofa (metr) */
+  private calcDistance(
     lat1: number,
     lng1: number,
     lat2: number,
@@ -50,66 +49,67 @@ export class MotionStateService {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
-  /** Nuqtalar arrayidan centroid (o'rtacha) hisoblash */
-  private computeCentroid(points: StopPoint[]): { lat: number; lng: number } {
-    if (points.length === 0) return { lat: 0, lng: 0 };
-    const sum = points.reduce(
-      (acc, p) => ({ lat: acc.lat + p.lat, lng: acc.lng + p.lng }),
-      { lat: 0, lng: 0 },
-    );
-    return {
-      lat: sum.lat / points.length,
-      lng: sum.lng / points.length,
-    };
-  }
-
   /** GPS nuqta ishonchli yoki yo'qligini tekshirish */
-  private isReliablePoint(
-    record: GpsRecord,
-    lastLat: number,
-    lastLng: number,
-  ): boolean {
-    // Tezlik tekshirish
-    if ((record.speed ?? 0) > MOTION.MAX_SPEED) return false;
+  private isReliablePoint(record: GpsRecord, state: MotionState | null): boolean {
+    if ((record.speed ?? 0) > this.config.maxSpeed) return false;
+    if (record.satellites < this.config.minSatellites) return false;
+    if (record.io.hdop !== null && record.io.hdop > this.config.maxHdop) return false;
 
-    // Satellite soni tekshirish — kam bo'lsa GPS signal yomon
-    if (record.satellites < MOTION.MIN_SATELLITES) return false;
-
-    // HDOP tekshirish — yuqori bo'lsa GPS aniqlik past
-    if (record.io.hdop !== null && record.io.hdop > MOTION.MAX_HDOP) return false;
-
-    // Masofa sakrash tekshirish (faqat avvalgi nuqta mavjud bo'lsa)
-    if (lastLat !== 0 && lastLng !== 0) {
-      const distance = this.calculateDistance(
-        lastLat,
-        lastLng,
+    // Masofa sakrash (faqat state mavjud bo'lsa)
+    if (state && state.lastLat !== 0 && state.lastLng !== 0) {
+      const dist = this.calcDistance(
+        state.lastLat,
+        state.lastLng,
         record.lat,
         record.lng,
       );
-      if (distance > MOTION.GPS_JUMP_THRESHOLD) return false;
+      if (dist > this.config.gpsJumpThreshold) return false;
     }
 
     return true;
   }
 
-  /** Stop nuqtalarini qo'shish (max limitdan oshmasin) */
-  private addStopPoint(
-    points: StopPoint[],
-    record: GpsRecord,
-  ): StopPoint[] {
-    const newPoints = [
-      ...points,
-      {
-        lat: record.lat,
-        lng: record.lng,
-        recordedAt: new Date(record.timestamp).toISOString(),
-      },
-    ];
-    // MAX limitdan oshsa — eskisini olib tashlash
-    if (newPoints.length > MOTION.MAX_STOP_POINTS) {
-      return newPoints.slice(-MOTION.MAX_STOP_POINTS);
+  /**
+   * Speed va distance ziddiyatini tekshirish.
+   * true = valid (mos), false = ziddiyat (glitch)
+   */
+  private isConsistent(distance: number, speed: number, ignition: boolean | null): boolean {
+    // dist > radius lekin speed = 0 → GPS jitter
+    if (distance > this.config.radius && speed < 1) return false;
+    // dist < radius lekin speed > 30 → sensor glitch
+    if (distance < this.config.radius && speed > 30) return false;
+    return true;
+  }
+
+  /** Birinchi data bo'yicha boshlang'ich state yaratish */
+  private initializeState(record: GpsRecord): MotionState {
+    const speed = record.speed ?? 0;
+    const ignition = record.io.ignition;
+    const time = new Date(record.timestamp).toISOString();
+
+    let state: MotionStatus;
+    if (speed > this.config.speedThreshold && ignition === true) {
+      state = 'MOVING';
+    } else if (ignition === false) {
+      state = 'PARKING';
+    } else {
+      state = 'STOPPED';
     }
-    return newPoints;
+
+    return {
+      state,
+      anchorLat: record.lat,
+      anchorLng: record.lng,
+      anchorTime: time,
+      consecutiveCount: 0,
+      timerStartedAt: null,
+      movingTimerStartedAt: null,
+      currentEventId: null,
+      lastLat: record.lat,
+      lastLng: record.lng,
+      lastSpeed: speed,
+      lastTime: time,
+    };
   }
 
   // ─── Redis ───
@@ -119,83 +119,44 @@ export class MotionStateService {
     if (!raw) return null;
 
     let data: unknown = raw;
-
     if (typeof data === 'string') {
-      try {
-        data = JSON.parse(data);
-      } catch {
-        return null;
-      }
+      try { data = JSON.parse(data); } catch { return null; }
     }
-
     if (typeof data === 'object' && data !== null && 'value' in data) {
       const inner = (data as { value: unknown }).value;
       if (typeof inner === 'string') {
-        try {
-          data = JSON.parse(inner);
-        } catch {
-          return null;
-        }
+        try { data = JSON.parse(inner); } catch { return null; }
       } else {
         data = inner;
       }
     }
 
-    if (
-      typeof data === 'object' &&
-      data !== null &&
-      'status' in data &&
-      'since' in data
-    ) {
-      const state = data as MotionState;
-      // Backward compatibility: eski state'larda yangi fieldlar yo'q
-      if (state.lastLat === undefined) state.lastLat = state.lat;
-      if (state.lastLng === undefined) state.lastLng = state.lng;
-      if (!Array.isArray(state.points)) state.points = [];
-      return state;
+    if (typeof data === 'object' && data !== null && 'state' in data) {
+      return data as MotionState;
     }
-
     return null;
   }
 
   private async setState(carId: number, state: MotionState): Promise<void> {
-    await this.cache.set(this.redisKey(carId), state, 0);
+    await this.cache.set(this.redisKey(carId), state, this.config.redisTtl * 1000);
   }
 
-  // ─── Active cars list ───
+  // ─── Active cars ───
 
   private async getActiveCars(): Promise<number[]> {
     const raw: unknown = await this.cache.get(ACTIVE_CARS_KEY);
     if (!raw) return [];
-
     let data: unknown = raw;
-
     if (typeof data === 'string') {
-      try {
-        data = JSON.parse(data);
-      } catch {
-        return [];
-      }
+      try { data = JSON.parse(data); } catch { return []; }
     }
-
     if (typeof data === 'object' && data !== null && 'value' in data) {
       const inner = (data as { value: unknown }).value;
       if (typeof inner === 'string') {
-        try {
-          data = JSON.parse(inner);
-        } catch {
-          return [];
-        }
-      } else {
-        data = inner;
-      }
+        try { data = JSON.parse(inner); } catch { return []; }
+      } else { data = inner; }
     }
-
-    if (Array.isArray(data)) {
-      return data as number[];
-    }
-
-    return [];
+    return Array.isArray(data) ? (data as number[]) : [];
   }
 
   private async addActiveCar(carId: number): Promise<void> {
@@ -217,27 +178,6 @@ export class MotionStateService {
     return result[0] ?? null;
   }
 
-  /** Dublikat tekshirish: oxirgi 60s ichida event bormi */
-  private async hasDuplicateEvent(
-    carId: number,
-    type: 'stop' | 'parking',
-    startAt: Date,
-  ): Promise<boolean> {
-    const threshold = new Date(startAt.getTime() - 60_000);
-    const existing = await this.db
-      .select({ id: carStopEvents.id })
-      .from(carStopEvents)
-      .where(
-        and(
-          eq(carStopEvents.carId, carId),
-          eq(carStopEvents.type, type),
-          gte(carStopEvents.startAt, threshold),
-        ),
-      )
-      .limit(1);
-    return existing.length > 0;
-  }
-
   private async createEvent(
     carId: number,
     type: 'stop' | 'parking',
@@ -245,27 +185,6 @@ export class MotionStateService {
     lat: number,
     lng: number,
   ): Promise<number> {
-    // Dublikat tekshirish
-    const isDuplicate = await this.hasDuplicateEvent(carId, type, startAt);
-    if (isDuplicate) {
-      this.logger.warn(
-        `Dublikat ${type} event o'tkazib yuborildi: carId=${carId}`,
-      );
-      // Mavjud eventni qaytarish
-      const existing = await this.db
-        .select({ id: carStopEvents.id })
-        .from(carStopEvents)
-        .where(
-          and(
-            eq(carStopEvents.carId, carId),
-            eq(carStopEvents.type, type),
-            gte(carStopEvents.startAt, new Date(startAt.getTime() - 60_000)),
-          ),
-        )
-        .limit(1);
-      if (existing[0]) return existing[0].id;
-    }
-
     // Ochiq eventlarni yopish
     const openEvents = await this.db
       .select({ id: carStopEvents.id, startAt: carStopEvents.startAt })
@@ -283,7 +202,7 @@ export class MotionStateService {
       .returning({ id: carStopEvents.id });
 
     this.logger.log(
-      `${type.toUpperCase()} boshlandi: carId=${carId}, eventId=${result.id}`,
+      `${type.toUpperCase()} event yaratildi: carId=${carId}, eventId=${result.id}, lat=${lat}, lng=${lng}`,
     );
     return result.id;
   }
@@ -296,392 +215,613 @@ export class MotionStateService {
     const durationSeconds = Math.floor(
       (endAt.getTime() - startAt.getTime()) / 1000,
     );
-
     await this.db
       .update(carStopEvents)
       .set({ endAt, durationSeconds })
       .where(eq(carStopEvents.id, eventId));
 
-    this.logger.log(
-      `Event yopildi: eventId=${eventId}, duration=${durationSeconds}s`,
-    );
-  }
-
-  /** Event koordinatasini centroid bilan yangilash */
-  private async updateEventCoordinates(
-    eventId: number,
-    lat: number,
-    lng: number,
-  ): Promise<void> {
-    await this.db
-      .update(carStopEvents)
-      .set({ latitude: lat, longitude: lng })
-      .where(eq(carStopEvents.id, eventId));
+    this.logger.log(`Event yopildi: eventId=${eventId}, duration=${durationSeconds}s`);
   }
 
   // ─── State Machine ───
-
-  private isMoving(state: MotionState, record: GpsRecord): boolean {
-    const speed = record.speed ?? 0;
-
-    if (speed > MOTION.SPEED_THRESHOLD) return true;
-
-    // lastLat/lastLng ishlatish (stale koordinata muammosini hal qilish)
-    const distance = this.calculateDistance(
-      state.lastLat,
-      state.lastLng,
-      record.lat,
-      record.lng,
-    );
-
-    if (distance > MOTION.DISTANCE_THRESHOLD) return true;
-
-    return false;
-  }
 
   private async transition(
     carId: number,
     state: MotionState,
     record: GpsRecord,
   ): Promise<MotionState> {
-    const ignition = record.io.ignition;
-    const recordTime = new Date(record.timestamp);
-    const sinceTime = new Date(state.since);
-    const elapsedSeconds = (recordTime.getTime() - sinceTime.getTime()) / 1000;
-
-    // GPS ishonchlilik tekshirish
-    if (!this.isReliablePoint(record, state.lastLat, state.lastLng)) {
+    // GPS ishonchlilik
+    if (!this.isReliablePoint(record, state)) {
       this.logger.debug(
-        `GPS sakrash filtrlandi: carId=${carId}, speed=${record.speed}, ` +
-          `lat=${record.lat}, lng=${record.lng}`,
+        `GPS ishonchsiz: carId=${carId}, speed=${record.speed}, sat=${record.satellites}`,
       );
-      return state; // ishonchsiz nuqtani o'tkazib yuborish
+      return state;
     }
 
-    if (ignition === false) {
-      return this.handleIgnitionOff(
-        carId,
-        state,
-        record,
-        recordTime,
-        elapsedSeconds,
-      );
+    const speed = record.speed ?? 0;
+    const ignition = record.io.ignition;
+    const time = new Date(record.timestamp);
+    const distFromAnchor = this.calcDistance(
+      state.anchorLat,
+      state.anchorLng,
+      record.lat,
+      record.lng,
+    );
+
+    // Ziddiyat tekshirish
+    if (!this.isConsistent(distFromAnchor, speed, ignition)) {
+      // Ketma-ketlik buzildi → count reset
+      state.consecutiveCount = 0;
+      if (state.movingTimerStartedAt) state.movingTimerStartedAt = null;
+      return { ...state, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: time.toISOString() };
     }
 
-    const moving = this.isMoving(state, record);
-
-    if (!moving) {
-      return this.handleSlow(carId, state, record, recordTime, elapsedSeconds);
-    } else {
-      return this.handleMoving(carId, state, record, recordTime);
+    switch (state.state) {
+      case 'MOVING':
+        return this.handleMoving(carId, state, record, speed, ignition, distFromAnchor, time);
+      case 'STOP_PENDING':
+        return this.handleStopPending(carId, state, record, speed, ignition, distFromAnchor, time);
+      case 'STOPPED':
+        return this.handleStopped(carId, state, record, speed, ignition, distFromAnchor, time);
+      case 'PARKING_PENDING':
+        return this.handleParkingPending(carId, state, record, speed, ignition, distFromAnchor, time);
+      case 'PARKING':
+        return this.handleParking(carId, state, record, speed, ignition, distFromAnchor, time);
+      default:
+        return state;
     }
   }
 
-  private async handleIgnitionOff(
-    carId: number,
-    state: MotionState,
-    record: GpsRecord,
-    recordTime: Date,
-    elapsedSeconds: number,
-  ): Promise<MotionState> {
-    const { status } = state;
-
-    // Parking da — nuqta qo'shish (centroid yangilanadi)
-    if (status === 'parking') {
-      const points = this.addStopPoint(state.points, record);
-      const centroid = this.computeCentroid(points);
-      if (state.eventId) {
-        await this.updateEventCoordinates(state.eventId, centroid.lat, centroid.lng);
-      }
-      return {
-        ...state,
-        points,
-        lat: centroid.lat,
-        lng: centroid.lng,
-        lastLat: record.lat,
-        lastLng: record.lng,
-      };
-    }
-
-    // Parking candidate — vaqt yetdimi tekshir
-    if (status === 'parking_candidate') {
-      const points = this.addStopPoint(state.points, record);
-      const centroid = this.computeCentroid(points);
-
-      if (elapsedSeconds >= MOTION.PARKING_THRESHOLD) {
-        if (state.eventId) {
-          await this.db
-            .update(carStopEvents)
-            .set({ type: 'parking', latitude: centroid.lat, longitude: centroid.lng })
-            .where(eq(carStopEvents.id, state.eventId));
-
-          this.logger.log(
-            `Stop → Parking upgrade: carId=${carId}, eventId=${state.eventId}`,
-          );
-
-          return {
-            status: 'parking',
-            since: state.since,
-            lat: centroid.lat,
-            lng: centroid.lng,
-            eventId: state.eventId,
-            lastLat: record.lat,
-            lastLng: record.lng,
-            points,
-          };
-        }
-
-        const eventId = await this.createEvent(
-          carId,
-          'parking',
-          new Date(state.since),
-          centroid.lat,
-          centroid.lng,
-        );
-        return {
-          status: 'parking',
-          since: state.since,
-          lat: centroid.lat,
-          lng: centroid.lng,
-          eventId,
-          lastLat: record.lat,
-          lastLng: record.lng,
-          points,
-        };
-      }
-
-      return {
-        ...state,
-        points,
-        lat: centroid.lat,
-        lng: centroid.lng,
-        lastLat: record.lat,
-        lastLng: record.lng,
-      };
-    }
-
-    // Stopped da ignition off → parking_candidate ga o'tkazish
-    if (status === 'stopped') {
-      const points = this.addStopPoint(state.points, record);
-      const centroid = this.computeCentroid(points);
-      if (state.eventId) {
-        await this.updateEventCoordinates(state.eventId, centroid.lat, centroid.lng);
-      }
-      return {
-        status: 'parking_candidate',
-        since: state.since,
-        lat: centroid.lat,
-        lng: centroid.lng,
-        eventId: state.eventId,
-        lastLat: record.lat,
-        lastLng: record.lng,
-        points,
-      };
-    }
-
-    // Moving yoki stop_candidate → parking_candidate
-    return {
-      status: 'parking_candidate',
-      since: recordTime.toISOString(),
-      lat: state.lastLat, // oxirgi ishonchli koordinata
-      lng: state.lastLng,
-      eventId: null,
-      lastLat: record.lat,
-      lastLng: record.lng,
-      points: [
-        {
-          lat: record.lat,
-          lng: record.lng,
-          recordedAt: recordTime.toISOString(),
-        },
-      ],
-    };
-  }
-
-  private async handleSlow(
-    carId: number,
-    state: MotionState,
-    record: GpsRecord,
-    recordTime: Date,
-    elapsedSeconds: number,
-  ): Promise<MotionState> {
-    const { status } = state;
-
-    // Stopped da — nuqtalar yig'ish, centroid yangilash
-    if (status === 'stopped') {
-      const points = this.addStopPoint(state.points, record);
-      const centroid = this.computeCentroid(points);
-      if (state.eventId) {
-        await this.updateEventCoordinates(state.eventId, centroid.lat, centroid.lng);
-      }
-      return {
-        ...state,
-        points,
-        lat: centroid.lat,
-        lng: centroid.lng,
-        lastLat: record.lat,
-        lastLng: record.lng,
-      };
-    }
-
-    // Parking da — nuqtalar yig'ish
-    if (status === 'parking') {
-      const points = this.addStopPoint(state.points, record);
-      const centroid = this.computeCentroid(points);
-      if (state.eventId) {
-        await this.updateEventCoordinates(state.eventId, centroid.lat, centroid.lng);
-      }
-      return {
-        ...state,
-        points,
-        lat: centroid.lat,
-        lng: centroid.lng,
-        lastLat: record.lat,
-        lastLng: record.lng,
-      };
-    }
-
-    if (status === 'stop_candidate') {
-      const points = this.addStopPoint(state.points, record);
-      const centroid = this.computeCentroid(points);
-
-      if (elapsedSeconds >= MOTION.STOP_THRESHOLD) {
-        const eventId = await this.createEvent(
-          carId,
-          'stop',
-          new Date(state.since),
-          centroid.lat,
-          centroid.lng,
-        );
-        return {
-          status: 'stopped',
-          since: state.since,
-          lat: centroid.lat,
-          lng: centroid.lng,
-          eventId,
-          lastLat: record.lat,
-          lastLng: record.lng,
-          points,
-        };
-      }
-
-      return {
-        ...state,
-        points,
-        lat: centroid.lat,
-        lng: centroid.lng,
-        lastLat: record.lat,
-        lastLng: record.lng,
-      };
-    }
-
-    // parking_candidate da speed past → nuqta yig'ish
-    if (status === 'parking_candidate') {
-      const points = this.addStopPoint(state.points, record);
-      const centroid = this.computeCentroid(points);
-      return {
-        ...state,
-        points,
-        lat: centroid.lat,
-        lng: centroid.lng,
-        lastLat: record.lat,
-        lastLng: record.lng,
-      };
-    }
-
-    // Moving → stop_candidate (lastLat ishlatish — stop_candidate boshlanish nuqtasi)
-    return {
-      status: 'stop_candidate',
-      since: recordTime.toISOString(),
-      lat: state.lastLat,
-      lng: state.lastLng,
-      eventId: null,
-      lastLat: record.lat,
-      lastLng: record.lng,
-      points: [
-        {
-          lat: record.lat,
-          lng: record.lng,
-          recordedAt: recordTime.toISOString(),
-        },
-      ],
-    };
-  }
+  // ─── MOVING ───
 
   private async handleMoving(
     carId: number,
     state: MotionState,
     record: GpsRecord,
-    recordTime: Date,
+    speed: number,
+    ignition: boolean | null,
+    distFromAnchor: number,
+    time: Date,
   ): Promise<MotionState> {
-    const { status } = state;
+    const timeStr = time.toISOString();
 
-    if (status === 'moving') {
-      // lastLat/lastLng yangilash
-      return {
-        ...state,
-        lastLat: record.lat,
-        lastLng: record.lng,
-      };
-    }
+    // Stop candidate: dist < radius + speed < threshold + ignition ON
+    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition === true) {
+      const newCount = state.consecutiveCount + 1;
 
-    // Grace period: parking/stopped dan chiqishda kuchaytirilgan tekshirish
-    // Muammo: ignition on → GPS jitter → moving → ignition off → yangi parking = dublikat
-    // Yechim: speed VA distance IKKALASI ham yuqori bo'lishi kerak
-    if (status === 'parking' || status === 'stopped') {
-      const speed = record.speed ?? 0;
-      const distance = this.calculateDistance(
-        state.lastLat,
-        state.lastLng,
-        record.lat,
-        record.lng,
-      );
-
-      // Kuchaytirilgan grace: speed < 25 YOKI distance < 150m → jitter, davom etsin
-      // Oldingi: speed < 20 AND distance < 100 (juda qat'iy)
-      // Yangi: speed < 25 OR distance < 150 (keng grace — bir jitter ham o'tkazib yubormaydi)
-      if (speed < MOTION.MOVING_GRACE_SPEED || distance < MOTION.MOVING_GRACE_DISTANCE) {
-        const points = this.addStopPoint(state.points, record);
-        const centroid = this.computeCentroid(points);
-        if (state.eventId) {
-          await this.updateEventCoordinates(state.eventId, centroid.lat, centroid.lng);
-        }
+      if (newCount === 1) {
+        // Birinchi mos data — anchor saqla
         return {
           ...state,
-          points,
-          lat: centroid.lat,
-          lng: centroid.lng,
+          anchorLat: record.lat,
+          anchorLng: record.lng,
+          anchorTime: timeStr,
+          consecutiveCount: newCount,
           lastLat: record.lat,
           lastLng: record.lng,
+          lastSpeed: speed,
+          lastTime: timeStr,
         };
       }
 
-      // Haqiqiy harakat — speed >= 25 VA distance >= 150m
-      if (state.eventId) {
-        await this.closeEvent(state.eventId, recordTime, new Date(state.since));
+      if (newCount >= this.config.consecutiveCount) {
+        // 5 ta to'ldi → STOP_PENDING
+        this.logger.log(`carId=${carId}: MOVING → STOP_PENDING`);
+        return {
+          state: 'STOP_PENDING',
+          anchorLat: state.anchorLat,
+          anchorLng: state.anchorLng,
+          anchorTime: state.anchorTime,
+          consecutiveCount: 0,
+          timerStartedAt: state.anchorTime,
+          movingTimerStartedAt: null,
+          currentEventId: null,
+          lastLat: record.lat,
+          lastLng: record.lng,
+          lastSpeed: speed,
+          lastTime: timeStr,
+        };
       }
+
+      return { ...state, consecutiveCount: newCount, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: timeStr };
     }
 
-    // parking_candidate / stop_candidate dan chiqish
-    if (status === 'parking_candidate' || status === 'stop_candidate') {
-      if (state.eventId) {
-        await this.closeEvent(state.eventId, recordTime, new Date(state.since));
+    // Parking candidate: dist < radius + speed < threshold + ignition OFF
+    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition === false) {
+      const newCount = state.consecutiveCount + 1;
+
+      if (newCount === 1) {
+        return {
+          ...state,
+          anchorLat: record.lat,
+          anchorLng: record.lng,
+          anchorTime: timeStr,
+          consecutiveCount: newCount,
+          lastLat: record.lat,
+          lastLng: record.lng,
+          lastSpeed: speed,
+          lastTime: timeStr,
+        };
       }
+
+      if (newCount >= this.config.consecutiveCount) {
+        this.logger.log(`carId=${carId}: MOVING → PARKING_PENDING`);
+        return {
+          state: 'PARKING_PENDING',
+          anchorLat: state.anchorLat,
+          anchorLng: state.anchorLng,
+          anchorTime: state.anchorTime,
+          consecutiveCount: 0,
+          timerStartedAt: state.anchorTime,
+          movingTimerStartedAt: null,
+          currentEventId: null,
+          lastLat: record.lat,
+          lastLng: record.lng,
+          lastSpeed: speed,
+          lastTime: timeStr,
+        };
+      }
+
+      return { ...state, consecutiveCount: newCount, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: timeStr };
     }
 
+    // Harakat davom etmoqda — count reset, anchor yangilash
     return {
-      status: 'moving',
-      since: recordTime.toISOString(),
-      lat: record.lat,
-      lng: record.lng,
-      eventId: null,
+      ...state,
+      consecutiveCount: 0,
+      anchorLat: record.lat,
+      anchorLng: record.lng,
+      anchorTime: timeStr,
       lastLat: record.lat,
       lastLng: record.lng,
-      points: [],
+      lastSpeed: speed,
+      lastTime: timeStr,
+    };
+  }
+
+  // ─── STOP_PENDING (10 min timer) ───
+
+  private async handleStopPending(
+    carId: number,
+    state: MotionState,
+    record: GpsRecord,
+    speed: number,
+    ignition: boolean | null,
+    distFromAnchor: number,
+    time: Date,
+  ): Promise<MotionState> {
+    const timeStr = time.toISOString();
+    const timerElapsed = state.timerStartedAt
+      ? (time.getTime() - new Date(state.timerStartedAt).getTime()) / 1000
+      : 0;
+
+    // Hali turgan joyida: dist < radius + speed < threshold + ignition ON
+    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition === true) {
+      // Timer to'ldimi?
+      if (timerElapsed >= this.config.stopTimeout) {
+        const eventId = await this.createEvent(
+          carId,
+          'stop',
+          new Date(state.anchorTime),
+          state.anchorLat,
+          state.anchorLng,
+        );
+        this.logger.log(`carId=${carId}: STOP_PENDING → STOPPED (${this.config.stopTimeout}s)`);
+        return {
+          state: 'STOPPED',
+          anchorLat: state.anchorLat,
+          anchorLng: state.anchorLng,
+          anchorTime: state.anchorTime,
+          consecutiveCount: 0,
+          timerStartedAt: state.timerStartedAt,
+          movingTimerStartedAt: null,
+          currentEventId: eventId,
+          lastLat: record.lat,
+          lastLng: record.lng,
+          lastSpeed: speed,
+          lastTime: timeStr,
+        };
+      }
+      // Timer davom — count reset (stop holat uchun count kerak emas)
+      return { ...state, consecutiveCount: 0, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: timeStr };
+    }
+
+    // Ignition OFF bo'ldi — PARKING_PENDING ga o'tish
+    if (speed < this.config.speedThreshold && ignition === false) {
+      const newCount = state.consecutiveCount + 1;
+      if (newCount >= this.config.consecutiveCount) {
+        this.logger.log(`carId=${carId}: STOP_PENDING → PARKING_PENDING (ignition OFF)`);
+        return {
+          state: 'PARKING_PENDING',
+          anchorLat: state.anchorLat,
+          anchorLng: state.anchorLng,
+          anchorTime: state.anchorTime,
+          consecutiveCount: 0,
+          timerStartedAt: timeStr,
+          movingTimerStartedAt: null,
+          currentEventId: null,
+          lastLat: record.lat,
+          lastLng: record.lng,
+          lastSpeed: speed,
+          lastTime: timeStr,
+        };
+      }
+      return { ...state, consecutiveCount: newCount, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: timeStr };
+    }
+
+    // Harakatlandi — chiqish uchun 5 ta ketma-ket
+    if (distFromAnchor >= this.config.radius && speed >= this.config.speedThreshold) {
+      const newCount = state.consecutiveCount + 1;
+      if (newCount >= this.config.consecutiveCount) {
+        this.logger.log(`carId=${carId}: STOP_PENDING → MOVING (harakatlandi)`);
+        return {
+          state: 'MOVING',
+          anchorLat: record.lat,
+          anchorLng: record.lng,
+          anchorTime: timeStr,
+          consecutiveCount: 0,
+          timerStartedAt: null,
+          movingTimerStartedAt: null,
+          currentEventId: null,
+          lastLat: record.lat,
+          lastLng: record.lng,
+          lastSpeed: speed,
+          lastTime: timeStr,
+        };
+      }
+      return { ...state, consecutiveCount: newCount, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: timeStr };
+    }
+
+    // Boshqa holat — count reset
+    return { ...state, consecutiveCount: 0, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: timeStr };
+  }
+
+  // ─── STOPPED ───
+
+  private async handleStopped(
+    carId: number,
+    state: MotionState,
+    record: GpsRecord,
+    speed: number,
+    ignition: boolean | null,
+    distFromAnchor: number,
+    time: Date,
+  ): Promise<MotionState> {
+    const timeStr = time.toISOString();
+
+    // Hali turgan joyida, ignition ON — STOPPED da qoladi
+    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition === true) {
+      return {
+        ...state,
+        consecutiveCount: 0,
+        movingTimerStartedAt: null,
+        lastLat: record.lat,
+        lastLng: record.lng,
+        lastSpeed: speed,
+        lastTime: timeStr,
+      };
+    }
+
+    // Ignition OFF — PARKING_PENDING ga o'tish
+    if (speed < this.config.speedThreshold && ignition === false) {
+      const newCount = state.consecutiveCount + 1;
+      if (newCount >= this.config.consecutiveCount) {
+        // Stop event yopish
+        if (state.currentEventId) {
+          await this.closeEvent(state.currentEventId, time, new Date(state.anchorTime));
+        }
+        this.logger.log(`carId=${carId}: STOPPED → PARKING_PENDING (ignition OFF)`);
+        return {
+          state: 'PARKING_PENDING',
+          anchorLat: record.lat,
+          anchorLng: record.lng,
+          anchorTime: timeStr,
+          consecutiveCount: 0,
+          timerStartedAt: timeStr,
+          movingTimerStartedAt: null,
+          currentEventId: null,
+          lastLat: record.lat,
+          lastLng: record.lng,
+          lastSpeed: speed,
+          lastTime: timeStr,
+        };
+      }
+      return { ...state, consecutiveCount: newCount, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: timeStr };
+    }
+
+    // Harakatlandi — MOVING ga o'tish (5 ta + 2 min)
+    if (distFromAnchor >= this.config.radius && speed >= this.config.speedThreshold) {
+      const newCount = state.consecutiveCount + 1;
+
+      // Moving timer boshlash (birinchi moving data da)
+      let movingTimerStart = state.movingTimerStartedAt;
+      if (!movingTimerStart) {
+        movingTimerStart = timeStr;
+      }
+
+      if (newCount >= this.config.consecutiveCount) {
+        const movingElapsed = (time.getTime() - new Date(movingTimerStart).getTime()) / 1000;
+        if (movingElapsed >= this.config.movingTimeout) {
+          // Stop event yopish
+          if (state.currentEventId) {
+            await this.closeEvent(state.currentEventId, new Date(movingTimerStart), new Date(state.anchorTime));
+          }
+          this.logger.log(`carId=${carId}: STOPPED → MOVING (${movingElapsed}s)`);
+          return {
+            state: 'MOVING',
+            anchorLat: record.lat,
+            anchorLng: record.lng,
+            anchorTime: timeStr,
+            consecutiveCount: 0,
+            timerStartedAt: null,
+            movingTimerStartedAt: null,
+            currentEventId: null,
+            lastLat: record.lat,
+            lastLng: record.lng,
+            lastSpeed: speed,
+            lastTime: timeStr,
+          };
+        }
+      }
+
+      return {
+        ...state,
+        consecutiveCount: newCount,
+        movingTimerStartedAt: movingTimerStart,
+        lastLat: record.lat,
+        lastLng: record.lng,
+        lastSpeed: speed,
+        lastTime: timeStr,
+      };
+    }
+
+    // Boshqa holat — count reset, moving timer reset
+    return {
+      ...state,
+      consecutiveCount: 0,
+      movingTimerStartedAt: null,
+      lastLat: record.lat,
+      lastLng: record.lng,
+      lastSpeed: speed,
+      lastTime: timeStr,
+    };
+  }
+
+  // ─── PARKING_PENDING (5 min timer) ───
+
+  private async handleParkingPending(
+    carId: number,
+    state: MotionState,
+    record: GpsRecord,
+    speed: number,
+    ignition: boolean | null,
+    distFromAnchor: number,
+    time: Date,
+  ): Promise<MotionState> {
+    const timeStr = time.toISOString();
+    const timerElapsed = state.timerStartedAt
+      ? (time.getTime() - new Date(state.timerStartedAt).getTime()) / 1000
+      : 0;
+
+    // Hali turgan joyida, ignition OFF — timer davom
+    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition === false) {
+      if (timerElapsed >= this.config.parkingTimeout) {
+        const eventId = await this.createEvent(
+          carId,
+          'parking',
+          new Date(state.anchorTime),
+          state.anchorLat,
+          state.anchorLng,
+        );
+        this.logger.log(`carId=${carId}: PARKING_PENDING → PARKING (${this.config.parkingTimeout}s)`);
+        return {
+          state: 'PARKING',
+          anchorLat: state.anchorLat,
+          anchorLng: state.anchorLng,
+          anchorTime: state.anchorTime,
+          consecutiveCount: 0,
+          timerStartedAt: state.timerStartedAt,
+          movingTimerStartedAt: null,
+          currentEventId: eventId,
+          lastLat: record.lat,
+          lastLng: record.lng,
+          lastSpeed: speed,
+          lastTime: timeStr,
+        };
+      }
+      return { ...state, consecutiveCount: 0, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: timeStr };
+    }
+
+    // Harakatlandi — MOVING ga (5 ta + 2 min)
+    if (distFromAnchor >= this.config.radius && speed >= this.config.speedThreshold) {
+      const newCount = state.consecutiveCount + 1;
+
+      let movingTimerStart = state.movingTimerStartedAt;
+      if (!movingTimerStart) {
+        movingTimerStart = timeStr;
+      }
+
+      if (newCount >= this.config.consecutiveCount) {
+        const movingElapsed = (time.getTime() - new Date(movingTimerStart).getTime()) / 1000;
+        if (movingElapsed >= this.config.movingTimeout) {
+          this.logger.log(`carId=${carId}: PARKING_PENDING → MOVING`);
+          return {
+            state: 'MOVING',
+            anchorLat: record.lat,
+            anchorLng: record.lng,
+            anchorTime: timeStr,
+            consecutiveCount: 0,
+            timerStartedAt: null,
+            movingTimerStartedAt: null,
+            currentEventId: null,
+            lastLat: record.lat,
+            lastLng: record.lng,
+            lastSpeed: speed,
+            lastTime: timeStr,
+          };
+        }
+      }
+
+      return {
+        ...state,
+        consecutiveCount: newCount,
+        movingTimerStartedAt: movingTimerStart,
+        lastLat: record.lat,
+        lastLng: record.lng,
+        lastSpeed: speed,
+        lastTime: timeStr,
+      };
+    }
+
+    // Ignition ON + turgan joyida — count reset, parking timer davom
+    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition === true) {
+      return { ...state, consecutiveCount: 0, movingTimerStartedAt: null, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: timeStr };
+    }
+
+    // Boshqa — count reset
+    return { ...state, consecutiveCount: 0, movingTimerStartedAt: null, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: timeStr };
+  }
+
+  // ─── PARKING ───
+
+  private async handleParking(
+    carId: number,
+    state: MotionState,
+    record: GpsRecord,
+    speed: number,
+    ignition: boolean | null,
+    distFromAnchor: number,
+    time: Date,
+  ): Promise<MotionState> {
+    const timeStr = time.toISOString();
+
+    // Hali turgan joyida — PARKING da qoladi (ignition ON ham bo'lsa)
+    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold) {
+      return {
+        ...state,
+        consecutiveCount: 0,
+        movingTimerStartedAt: null,
+        lastLat: record.lat,
+        lastLng: record.lng,
+        lastSpeed: speed,
+        lastTime: timeStr,
+      };
+    }
+
+    // Harakatlandi — MOVING ga (5 ta + 2 min)
+    if (distFromAnchor >= this.config.radius && speed >= this.config.speedThreshold && ignition === true) {
+      const newCount = state.consecutiveCount + 1;
+
+      let movingTimerStart = state.movingTimerStartedAt;
+      if (!movingTimerStart) {
+        movingTimerStart = timeStr;
+      }
+
+      if (newCount >= this.config.consecutiveCount) {
+        const movingElapsed = (time.getTime() - new Date(movingTimerStart).getTime()) / 1000;
+        if (movingElapsed >= this.config.movingTimeout) {
+          // Parking event yopish — endAt = moving timer boshlangan vaqt
+          if (state.currentEventId) {
+            await this.closeEvent(state.currentEventId, new Date(movingTimerStart), new Date(state.anchorTime));
+          }
+          this.logger.log(`carId=${carId}: PARKING → MOVING (${movingElapsed}s)`);
+          return {
+            state: 'MOVING',
+            anchorLat: record.lat,
+            anchorLng: record.lng,
+            anchorTime: timeStr,
+            consecutiveCount: 0,
+            timerStartedAt: null,
+            movingTimerStartedAt: null,
+            currentEventId: null,
+            lastLat: record.lat,
+            lastLng: record.lng,
+            lastSpeed: speed,
+            lastTime: timeStr,
+          };
+        }
+      }
+
+      return {
+        ...state,
+        consecutiveCount: newCount,
+        movingTimerStartedAt: movingTimerStart,
+        lastLat: record.lat,
+        lastLng: record.lng,
+        lastSpeed: speed,
+        lastTime: timeStr,
+      };
+    }
+
+    // Towing: ignition OFF + speed > 5 + dist > radius
+    if (ignition === false && speed > this.config.speedThreshold && distFromAnchor >= this.config.radius) {
+      const newCount = state.consecutiveCount + 1;
+
+      let movingTimerStart = state.movingTimerStartedAt;
+      if (!movingTimerStart) {
+        movingTimerStart = timeStr;
+      }
+
+      if (newCount >= this.config.consecutiveCount) {
+        const movingElapsed = (time.getTime() - new Date(movingTimerStart).getTime()) / 1000;
+        if (movingElapsed >= this.config.movingTimeout) {
+          if (state.currentEventId) {
+            await this.closeEvent(state.currentEventId, new Date(movingTimerStart), new Date(state.anchorTime));
+          }
+          this.logger.log(`carId=${carId}: PARKING → MOVING (towing detected)`);
+          return {
+            state: 'MOVING',
+            anchorLat: record.lat,
+            anchorLng: record.lng,
+            anchorTime: timeStr,
+            consecutiveCount: 0,
+            timerStartedAt: null,
+            movingTimerStartedAt: null,
+            currentEventId: null,
+            lastLat: record.lat,
+            lastLng: record.lng,
+            lastSpeed: speed,
+            lastTime: timeStr,
+          };
+        }
+      }
+
+      return {
+        ...state,
+        consecutiveCount: newCount,
+        movingTimerStartedAt: movingTimerStart,
+        lastLat: record.lat,
+        lastLng: record.lng,
+        lastSpeed: speed,
+        lastTime: timeStr,
+      };
+    }
+
+    // Boshqa — count reset
+    return {
+      ...state,
+      consecutiveCount: 0,
+      movingTimerStartedAt: null,
+      lastLat: record.lat,
+      lastLng: record.lng,
+      lastSpeed: speed,
+      lastTime: timeStr,
     };
   }
 
   // ─── Socket emit ───
+
+  /** Status ni eski formatga convert qilish (frontend uchun) */
+  toFrontendStatus(status: MotionStatus): string {
+    const map: Record<MotionStatus, string> = {
+      MOVING: 'moving',
+      STOP_PENDING: 'stop_candidate',
+      STOPPED: 'stopped',
+      PARKING_PENDING: 'parking_candidate',
+      PARKING: 'parking',
+    };
+    return map[status] ?? 'moving';
+  }
 
   private async emitMotionState(carId: number, state: MotionState) {
     const car = await this.getCarInfo(carId);
@@ -691,17 +831,17 @@ export class MotionStateService {
       carId,
       carName: car.name,
       carNumber: car.carNumber,
-      status: state.status,
-      since: state.since,
-      lat: state.lat,
-      lng: state.lng,
+      status: this.toFrontendStatus(state.state),
+      since: state.anchorTime,
+      lat: state.anchorLat,
+      lng: state.anchorLng,
     });
   }
 
-  // ─── Cron: candidate timeout tekshirish ───
+  // ─── Cron: PENDING timerlarni tekshirish ───
 
   @Cron('*/60 * * * * *')
-  async checkCandidateTimeouts(): Promise<void> {
+  async checkPendingTimeouts(): Promise<void> {
     const activeCars = await this.getActiveCars();
     if (activeCars.length === 0) return;
 
@@ -712,91 +852,53 @@ export class MotionStateService {
         const state = await this.getState(carId);
         if (!state) continue;
 
-        const elapsedSeconds = (now - new Date(state.since).getTime()) / 1000;
         let newState: MotionState | null = null;
 
-        if (
-          state.status === 'parking_candidate' &&
-          elapsedSeconds >= MOTION.PARKING_THRESHOLD
-        ) {
-          const centroid = this.computeCentroid(state.points);
-          const lat = state.points.length > 0 ? centroid.lat : state.lat;
-          const lng = state.points.length > 0 ? centroid.lng : state.lng;
-
-          if (state.eventId) {
-            await this.db
-              .update(carStopEvents)
-              .set({ type: 'parking', latitude: lat, longitude: lng })
-              .where(eq(carStopEvents.id, state.eventId));
-
-            this.logger.log(
-              `Cron: Stop → Parking upgrade: carId=${carId}, eventId=${state.eventId}`,
-            );
-
-            newState = {
-              status: 'parking',
-              since: state.since,
-              lat,
-              lng,
-              eventId: state.eventId,
-              lastLat: state.lastLat,
-              lastLng: state.lastLng,
-              points: state.points,
-            };
-          } else {
+        // STOP_PENDING — 10 min timer
+        if (state.state === 'STOP_PENDING' && state.timerStartedAt) {
+          const elapsed = (now - new Date(state.timerStartedAt).getTime()) / 1000;
+          if (elapsed >= this.config.stopTimeout) {
             const eventId = await this.createEvent(
               carId,
-              'parking',
-              new Date(state.since),
-              lat,
-              lng,
+              'stop',
+              new Date(state.anchorTime),
+              state.anchorLat,
+              state.anchorLng,
             );
             newState = {
-              status: 'parking',
-              since: state.since,
-              lat,
-              lng,
-              eventId,
-              lastLat: state.lastLat,
-              lastLng: state.lastLng,
-              points: state.points,
+              ...state,
+              state: 'STOPPED',
+              consecutiveCount: 0,
+              currentEventId: eventId,
             };
+            this.logger.log(`Cron: carId=${carId} STOP_PENDING → STOPPED`);
           }
         }
 
-        if (
-          state.status === 'stop_candidate' &&
-          elapsedSeconds >= MOTION.STOP_THRESHOLD
-        ) {
-          const centroid = this.computeCentroid(state.points);
-          const lat = state.points.length > 0 ? centroid.lat : state.lat;
-          const lng = state.points.length > 0 ? centroid.lng : state.lng;
-
-          const eventId = await this.createEvent(
-            carId,
-            'stop',
-            new Date(state.since),
-            lat,
-            lng,
-          );
-          newState = {
-            status: 'stopped',
-            since: state.since,
-            lat,
-            lng,
-            eventId,
-            lastLat: state.lastLat,
-            lastLng: state.lastLng,
-            points: state.points,
-          };
+        // PARKING_PENDING — 5 min timer
+        if (state.state === 'PARKING_PENDING' && state.timerStartedAt) {
+          const elapsed = (now - new Date(state.timerStartedAt).getTime()) / 1000;
+          if (elapsed >= this.config.parkingTimeout) {
+            const eventId = await this.createEvent(
+              carId,
+              'parking',
+              new Date(state.anchorTime),
+              state.anchorLat,
+              state.anchorLng,
+            );
+            newState = {
+              ...state,
+              state: 'PARKING',
+              consecutiveCount: 0,
+              currentEventId: eventId,
+            };
+            this.logger.log(`Cron: carId=${carId} PARKING_PENDING → PARKING`);
+          }
         }
 
         if (newState) {
           await this.setState(carId, newState);
           await this.emitMotionState(carId, newState);
-          this.logger.log(
-            `Cron: carId=${carId}, ${state.status} → ${newState.status}`,
-          );
         }
       } catch (error) {
         this.logger.error(`Cron xato: carId=${carId}`, error);
@@ -813,36 +915,52 @@ export class MotionStateService {
 
     if (!state) {
       const first = records[0];
-      state = {
-        status: 'moving',
-        since: new Date(first.timestamp).toISOString(),
-        lat: first.lat,
-        lng: first.lng,
-        eventId: null,
-        lastLat: first.lat,
-        lastLng: first.lng,
-        points: [],
-      };
-      this.logger.log(`Yangi state: carId=${carId}, status=moving`);
+
+      // GPS ishonchlilik tekshirish
+      if (!this.isReliablePoint(first, null)) {
+        this.logger.warn(`Birinchi data ishonchsiz: carId=${carId}`);
+        return;
+      }
+
+      state = this.initializeState(first);
+
+      // Birinchi datada STOPPED/PARKING bo'lsa — darhol event yaratish
+      if (state.state === 'STOPPED') {
+        const eventId = await this.createEvent(
+          carId,
+          'stop',
+          new Date(first.timestamp),
+          first.lat,
+          first.lng,
+        );
+        state.currentEventId = eventId;
+      } else if (state.state === 'PARKING') {
+        const eventId = await this.createEvent(
+          carId,
+          'parking',
+          new Date(first.timestamp),
+          first.lat,
+          first.lng,
+        );
+        state.currentEventId = eventId;
+      }
+
+      this.logger.log(`Yangi device: carId=${carId}, state=${state.state}`);
+      records = records.slice(1); // birinchi data allaqachon ishlatildi
     }
 
-    let stateChanged = false;
+    let prevState = state.state;
 
     for (const record of records) {
-      const prevStatus = state.status;
       state = await this.transition(carId, state, record);
-      if (state.status !== prevStatus) {
-        stateChanged = true;
-        this.logger.log(
-          `State o'zgardi: carId=${carId}, ${prevStatus} → ${state.status}`,
-        );
+
+      if (state.state !== prevState) {
+        this.logger.log(`carId=${carId}: ${prevState} → ${state.state}`);
+        await this.emitMotionState(carId, state);
+        prevState = state.state;
       }
     }
 
     await this.setState(carId, state);
-
-    if (stateChanged) {
-      await this.emitMotionState(carId, state);
-    }
   }
 }

@@ -281,8 +281,8 @@ export class CarService {
         const state = await this.motionStateService.getState(car.carId);
         return {
           ...car,
-          status: state?.status ?? 'offline',
-          statusSince: state?.since ?? null,
+          status: state ? this.motionStateService.toFrontendStatus(state.state) : 'offline',
+          statusSince: state?.anchorTime ?? null,
         };
       }),
     );
