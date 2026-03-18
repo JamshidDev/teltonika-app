@@ -88,7 +88,7 @@ export class MotionStateService {
     const time = new Date(record.timestamp).toISOString();
 
     let state: MotionStatus;
-    if (speed > this.config.speedThreshold && ignition === true) {
+    if (speed > this.config.speedThreshold && ignition !== false) {
       state = 'MOVING';
     } else if (ignition === false) {
       state = 'PARKING';
@@ -285,8 +285,8 @@ export class MotionStateService {
   ): Promise<MotionState> {
     const timeStr = time.toISOString();
 
-    // Stop candidate: dist < radius + speed < threshold + ignition ON
-    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition === true) {
+    // Stop candidate: dist < radius + speed < threshold + ignition ON (yoki null)
+    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition !== false) {
       const newCount = state.consecutiveCount + 1;
 
       if (newCount === 1) {
@@ -396,7 +396,7 @@ export class MotionStateService {
       : 0;
 
     // Hali turgan joyida: dist < radius + speed < threshold + ignition ON
-    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition === true) {
+    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition !== false) {
       // Timer to'ldimi?
       if (timerElapsed >= this.config.stopTimeout) {
         const eventId = await this.createEvent(
@@ -490,7 +490,7 @@ export class MotionStateService {
     const timeStr = time.toISOString();
 
     // Hali turgan joyida, ignition ON — STOPPED da qoladi
-    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition === true) {
+    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition !== false) {
       return {
         ...state,
         consecutiveCount: 0,
@@ -674,7 +674,7 @@ export class MotionStateService {
     }
 
     // Ignition ON + turgan joyida — count reset, parking timer davom
-    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition === true) {
+    if (distFromAnchor < this.config.radius && speed < this.config.speedThreshold && ignition !== false) {
       return { ...state, consecutiveCount: 0, movingTimerStartedAt: null, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: timeStr };
     }
 
@@ -709,7 +709,7 @@ export class MotionStateService {
     }
 
     // Harakatlandi — MOVING ga (5 ta + 2 min)
-    if (distFromAnchor >= this.config.radius && speed >= this.config.speedThreshold && ignition === true) {
+    if (distFromAnchor >= this.config.radius && speed >= this.config.speedThreshold && ignition !== false) {
       const newCount = state.consecutiveCount + 1;
 
       let movingTimerStart = state.movingTimerStartedAt;
