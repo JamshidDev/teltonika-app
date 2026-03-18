@@ -598,26 +598,8 @@ export class HistoryService {
         pointIndex++;
       }
 
-      // Route → Event connector: route oxirgi nuqtasi eventdan uzoq bo'lsa,
-      // event koordinatasini route oxiriga qo'shib, uzluksiz polyline hosil qilish
+      // Route segmentini timeline ga qo'shish (connector'siz — to'g'ri chiziq oldini olish)
       if (segment.length >= 1) {
-        const lastPt = segment[segment.length - 1];
-        const gapToEvent = this.calculateDistance(
-          lastPt.lat,
-          lastPt.lng,
-          event.lat,
-          event.lng,
-        );
-        if (gapToEvent > 100 && gapToEvent < 10000) {
-          // Event nuqtasini route oxiriga connector sifatida qo'shish
-          segment.push({
-            lat: event.lat,
-            lng: event.lng,
-            speed: 0,
-            angle: lastPt.angle,
-            recordedAt: event.startAt,
-          });
-        }
         this.pushRouteSegment(timeline, segment);
       }
 
@@ -659,33 +641,7 @@ export class HistoryService {
         }
       }
 
-      // Event → keyingi Route connector: agar keyingi route nuqtasi uzoq bo'lsa,
-      // event koordinatasini keyingi segmentning boshiga qo'shish
-      if (
-        event.endAt &&
-        pointIndex < points.length
-      ) {
-        const nextPt = points[pointIndex];
-        const gapFromEvent = this.calculateDistance(
-          event.lat,
-          event.lng,
-          nextPt.lat,
-          nextPt.lng,
-        );
-        if (gapFromEvent > 100 && gapFromEvent < 10000) {
-          // Keyingi segment oldiga event nuqtasini qo'shish
-          // (pointIndex o'zgarmaydi — segment loop da yig'iladi)
-          points.splice(pointIndex, 0, {
-            lat: event.lat,
-            lng: event.lng,
-            speed: 0,
-            angle: nextPt.angle,
-            recordedAt: event.endAt,
-          } as RoutePoint);
-          // routeTimes ni ham yangilash
-          routeTimes.splice(pointIndex, 0, event.endAt.getTime());
-        }
-      }
+      // Connector olib tashlandi — to'g'ri chiziq artefaktlarni oldini olish
     }
 
     // Oxirgi eventdan keyingi qolgan nuqtalar
@@ -695,27 +651,8 @@ export class HistoryService {
       pointIndex++;
     }
 
-    // Event → Route connector: oxirgi eventdan qolgan nuqtalar uchun
-    if (remaining.length >= 1 && sortedEvents.length > 0) {
-      const lastEvent = sortedEvents[sortedEvents.length - 1];
-      const firstRemaining = remaining[0];
-      const gapFromEvent = this.calculateDistance(
-        lastEvent.lat,
-        lastEvent.lng,
-        firstRemaining.lat,
-        firstRemaining.lng,
-      );
-      if (gapFromEvent > 100 && gapFromEvent < 10000 && lastEvent.endAt) {
-        remaining.unshift({
-          lat: lastEvent.lat,
-          lng: lastEvent.lng,
-          speed: 0,
-          angle: firstRemaining.angle,
-          recordedAt: lastEvent.endAt,
-        });
-      }
-      this.pushRouteSegment(timeline, remaining);
-    } else if (remaining.length >= 1) {
+    // Qolgan nuqtalarni route sifatida qo'shish (connector'siz)
+    if (remaining.length >= 1) {
       this.pushRouteSegment(timeline, remaining);
     }
 
