@@ -8,6 +8,7 @@ import { POSITION_QUEUE } from './position.job';
 import { GatewayModule } from '@/shared/gateway/gateway.module';
 import { MotionStateService } from '@/teltonika/motion-state.service';
 import { MotionConfig } from '@/shared/config/motion.config';
+import { RouteConfig } from '@/shared/config/route.config';
 
 @Module({
   imports: [BullModule.registerQueue({ name: POSITION_QUEUE }), GatewayModule],
@@ -18,6 +19,7 @@ import { MotionConfig } from '@/shared/config/motion.config';
     PositionProcessor,
     MotionStateService,
     MotionConfig,
+    RouteConfig,
   ],
   exports: [MotionStateService,]
 })
