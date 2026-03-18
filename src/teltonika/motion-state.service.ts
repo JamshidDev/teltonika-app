@@ -22,7 +22,14 @@ export class MotionStateService {
     @InjectDb() private db: DataSource,
     private readonly config: MotionConfig,
     private readonly trackingGateway: TrackingGateway,
-  ) {}
+  ) {
+    // Config tekshirish — agar configify load qilmagan bo'lsa, log yozish
+    this.logger.log(
+      `[CONFIG] radius=${this.config.radius}, speedThreshold=${this.config.speedThreshold}, ` +
+        `consecutiveCount=${this.config.consecutiveCount}, stopTimeout=${this.config.stopTimeout}, ` +
+        `parkingTimeout=${this.config.parkingTimeout}, movingTimeout=${this.config.movingTimeout}`,
+    );
+  }
 
   // ─── Helpers ───
 
@@ -547,6 +554,11 @@ export class MotionStateService {
         movingTimerStart = timeStr;
       }
 
+      this.logger.debug(
+        `[STOPPED→MOVING] carId=${carId}: count=${newCount}/${this.config.consecutiveCount}, ` +
+          `movingTimer=${movingTimerStart}`,
+      );
+
       if (newCount >= this.config.consecutiveCount) {
         const movingElapsed = (time.getTime() - new Date(movingTimerStart).getTime()) / 1000;
         if (movingElapsed >= this.config.movingTimeout) {
@@ -584,6 +596,11 @@ export class MotionStateService {
     }
 
     // Boshqa holat — count reset, moving timer reset
+    this.logger.debug(
+      `[STOPPED-CATCH] carId=${carId}: hech qanday shart bajarilmadi! ` +
+        `dist=${distFromAnchor.toFixed(1)}, speed=${speed}, ign=${ignition}, ` +
+        `radius=${this.config.radius}, speedThreshold=${this.config.speedThreshold}`,
+    );
     return {
       ...state,
       consecutiveCount: 0,
