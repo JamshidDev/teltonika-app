@@ -233,7 +233,7 @@ export class MotionStateService {
     // GPS ishonchlilik
     if (!this.isReliablePoint(record, state)) {
       this.logger.debug(
-        `GPS ishonchsiz: carId=${carId}, speed=${record.speed}, sat=${record.satellites}`,
+        `[SKIP] carId=${carId}: GPS ishonchsiz, speed=${record.speed}, sat=${record.satellites}, hdop=${record.io.hdop}`,
       );
       return state;
     }
@@ -248,9 +248,17 @@ export class MotionStateService {
       record.lng,
     );
 
+    this.logger.debug(
+      `[TRANSITION] carId=${carId}: state=${state.state}, speed=${speed}, ign=${ignition}, ` +
+        `distAnchor=${distFromAnchor.toFixed(1)}m, count=${state.consecutiveCount}, ` +
+        `lat=${record.lat}, lng=${record.lng}`,
+    );
+
     // Ziddiyat tekshirish
     if (!this.isConsistent(distFromAnchor, speed, ignition)) {
-      // Ketma-ketlik buzildi → count reset
+      this.logger.debug(
+        `[GLITCH] carId=${carId}: ziddiyat! dist=${distFromAnchor.toFixed(1)}m, speed=${speed} → count RESET`,
+      );
       state.consecutiveCount = 0;
       if (state.movingTimerStartedAt) state.movingTimerStartedAt = null;
       return { ...state, lastLat: record.lat, lastLng: record.lng, lastSpeed: speed, lastTime: time.toISOString() };
@@ -913,12 +921,19 @@ export class MotionStateService {
 
     let state = await this.getState(carId);
 
+    this.logger.debug(
+      `[PROCESS] carId=${carId}: ${records.length} ta record, ` +
+        `state=${state ? state.state : 'NULL (yangi device)'}`,
+    );
+
     if (!state) {
       const first = records[0];
 
       // GPS ishonchlilik tekshirish
       if (!this.isReliablePoint(first, null)) {
-        this.logger.warn(`Birinchi data ishonchsiz: carId=${carId}`);
+        this.logger.warn(
+          `[PROCESS] carId=${carId}: birinchi data ishonchsiz, speed=${first.speed}, sat=${first.satellites} — SKIP`,
+        );
         return;
       }
 
@@ -945,8 +960,11 @@ export class MotionStateService {
         state.currentEventId = eventId;
       }
 
-      this.logger.log(`Yangi device: carId=${carId}, state=${state.state}`);
-      records = records.slice(1); // birinchi data allaqachon ishlatildi
+      this.logger.log(
+        `[INIT] carId=${carId}: yangi device, state=${state.state}, ` +
+          `speed=${first.speed}, ign=${first.io.ignition}, lat=${first.lat}, lng=${first.lng}`,
+      );
+      records = records.slice(1);
     }
 
     let prevState = state.state;
@@ -955,11 +973,18 @@ export class MotionStateService {
       state = await this.transition(carId, state, record);
 
       if (state.state !== prevState) {
-        this.logger.log(`carId=${carId}: ${prevState} → ${state.state}`);
+        this.logger.log(
+          `[STATE] carId=${carId}: ${prevState} → ${state.state}, ` +
+            `count=${state.consecutiveCount}, anchor=(${state.anchorLat.toFixed(6)},${state.anchorLng.toFixed(6)})`,
+        );
         await this.emitMotionState(carId, state);
         prevState = state.state;
       }
     }
+
+    this.logger.debug(
+      `[PROCESS] carId=${carId}: tugadi, state=${state.state}, count=${state.consecutiveCount}`,
+    );
 
     await this.setState(carId, state);
   }

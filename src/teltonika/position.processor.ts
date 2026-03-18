@@ -35,11 +35,24 @@ export class PositionProcessor extends WorkerHost {
   async process(job: Job<SaveRecordsJobData>) {
     const { carId, records, deviceId, bytesReceived } = job.data;
 
-    const validRecords = records.filter((r) => {
+    // BullMQ JSON serialization: Date → string. Qaytaramiz.
+    const hydratedRecords = records.map((r) => ({
+      ...r,
+      timestamp: new Date(r.timestamp),
+    }));
+
+    this.logger.debug(
+      `[DEBUG] carId=${carId}: ${hydratedRecords.length} ta record keldi, ` +
+        `birinchi: speed=${hydratedRecords[0]?.speed}, ign=${hydratedRecords[0]?.io?.ignition}, ` +
+        `lat=${hydratedRecords[0]?.lat}, lng=${hydratedRecords[0]?.lng}`,
+    );
+
+    const validRecords = hydratedRecords.filter((r) => {
       if (!this.isValidRecord(r)) {
         this.logger.warn(
-          `Noto'g'ri record: carId=${carId}, lat=${r.lat}, lng=${r.lng}, ` +
-            `ignition=${r.io.ignition}, time=${r?.timestamp.toISOString()} — skip`,
+          `[FILTER] carId=${carId}: lat=${r.lat}, lng=${r.lng}, ` +
+            `ign=${r.io.ignition}, sat=${r.satellites}, speed=${r.speed}, ` +
+            `time=${r.timestamp.toISOString()} — SKIP`,
         );
         return false;
       }
@@ -48,14 +61,14 @@ export class PositionProcessor extends WorkerHost {
 
     if (validRecords.length === 0) {
       this.logger.warn(
-        `carId=${carId}: barcha ${records.length} ta record noto'g'ri, job skip`,
+        `[FILTER] carId=${carId}: barcha ${hydratedRecords.length} ta record filtrlandi, job skip`,
       );
       return;
     }
 
-    if (validRecords.length < records.length) {
+    if (validRecords.length < hydratedRecords.length) {
       this.logger.warn(
-        `carId=${carId}: ${records.length - validRecords.length}/${records.length} ta record filtrlandi`,
+        `[FILTER] carId=${carId}: ${hydratedRecords.length - validRecords.length}/${hydratedRecords.length} ta record filtrlandi`,
       );
     }
 
@@ -68,9 +81,11 @@ export class PositionProcessor extends WorkerHost {
     );
 
     try {
+      this.logger.debug(`[DEBUG] carId=${carId}: motionState.processRecords chaqirilmoqda, ${validRecords.length} ta record`);
       await this.motionStateService.processRecords(carId, validRecords);
+      this.logger.debug(`[DEBUG] carId=${carId}: motionState.processRecords tugadi`);
     } catch (error) {
-      this.logger.error(`MotionState xato: carId=${carId}`, error);
+      this.logger.error(`[ERROR] MotionState xato: carId=${carId}`, error);
     }
   }
 }
