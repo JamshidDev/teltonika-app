@@ -197,15 +197,51 @@ export class HistoryService {
              angle,
              ignition,
              satellites,
-             recorded_at as "recordedAt"
+             recorded_at as "recordedAt",
+             created_at  as "createdAt"
       FROM car_positions
       WHERE car_id = ${carId}
         AND recorded_at BETWEEN ${new Date(from)} AND ${new Date(to)}
         AND latitude != 0 AND longitude != 0
-      ORDER BY recorded_at ASC
+      ORDER BY created_at ASC
     `);
 
-    return result.rows;
+    const points = result.rows as Array<{
+      lat: number;
+      lng: number;
+      speed: number;
+      angle: number;
+      ignition: boolean;
+      satellites: number;
+      recordedAt: string;
+      createdAt: string;
+    }>;
+
+    // 24 soatga guruhlash
+    const hours: Record<number, typeof points> = {};
+    for (let h = 0; h < 24; h++) {
+      hours[h] = [];
+    }
+
+    for (const p of points) {
+      const hour = new Date(p.recordedAt).getUTCHours();
+      hours[hour].push(p);
+    }
+
+    const hourly = Object.entries(hours).map(([hour, pts]) => ({
+      hour: Number(hour),
+      label: `${String(hour).padStart(2, '0')}:00 - ${String(hour).padStart(2, '0')}:59`,
+      count: pts.length,
+      points: pts,
+    }));
+
+    return {
+      carId,
+      from,
+      to,
+      totalPoints: points.length,
+      hourly,
+    };
   }
 
   /**

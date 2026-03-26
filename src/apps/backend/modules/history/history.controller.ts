@@ -34,6 +34,7 @@ export class HistoryController {
     );
   }
 
+  @ApiOperation({ summary: 'Raw positions grouped by hour (24h)' })
   @Get('raw-positions')
   async getRawPositions(@Query() dto: CarRouteWithEventsDto) {
     return this.historyService.getRawPositions(dto.carId, dto.from, dto.to);
