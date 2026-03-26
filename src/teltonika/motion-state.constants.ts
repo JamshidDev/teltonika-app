@@ -1,6 +1,6 @@
 /**
- * Eski MOTION constant — boshqa service'lar (position, history) ishlatadi.
- * Yangi motion-state.service.ts MotionConfig dan o'qiydi.
+ * GPS filtrlash va route qurish uchun konstantalar.
+ * Position va History service'larda ishlatiladi.
  */
 export const MOTION = {
   MIN_SATELLITES: 4,
@@ -14,41 +14,3 @@ export const MOTION = {
   MERGE_MAX_DISTANCE: 200,
   MERGE_SHORT_GAP: 120,
 } as const;
-
-/** Motion state machine holatlari */
-export type MotionStatus =
-  | 'MOVING'
-  | 'STOP_PENDING'
-  | 'STOPPED'
-  | 'PARKING_PENDING'
-  | 'PARKING';
-
-/** Redis da saqlanadigan device holati */
-export interface MotionState {
-  /** Joriy holat */
-  state: MotionStatus;
-
-  /** Anchor — timer boshlangan nuqta koordinatasi */
-  anchorLat: number;
-  anchorLng: number;
-  /** Anchor vaqti (ISO string) */
-  anchorTime: string;
-
-  /** Ketma-ket mos data hisoblagich */
-  consecutiveCount: number;
-
-  /** Joriy holat timeri boshlangan vaqt (ISO string) */
-  timerStartedAt: string | null;
-
-  /** Moving timer — STOPPED/PARKING dan chiqish uchun (ISO string) */
-  movingTimerStartedAt: string | null;
-
-  /** DB dagi joriy event ID */
-  currentEventId: number | null;
-
-  /** Oxirgi GPS nuqta (distance hisoblash uchun) */
-  lastLat: number;
-  lastLng: number;
-  lastSpeed: number;
-  lastTime: string;
-}

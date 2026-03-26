@@ -19,14 +19,17 @@ import {
   CreateCarDto,
   UpdateCarDto,
 } from '@/apps/backend/modules/cars/car.dto';
-import { MotionStateService } from '@/teltonika/motion-state.service';
-
 @Injectable()
 export class CarService {
   constructor(
     @InjectDb() private db: DataSource,
-    private readonly motionStateService: MotionStateService,
   ) {}
+
+  private getStatusFromData(speed: number | null, ignition: boolean | null): string {
+    if (ignition === false) return 'parking';
+    if ((speed ?? 0) === 0) return 'stopped';
+    return 'moving';
+  }
 
   async findAll(dto: PaginationDto) {
     const page = Math.max(dto.page ?? 1, 1);
@@ -276,16 +279,10 @@ export class CarService {
     const total = Number(countResult[0]?.total ?? 0);
     const totalPages = Math.ceil(total / pageSize);
 
-    const dataWithStatus = await Promise.all(
-      data.map(async (car) => {
-        const state = await this.motionStateService.getState(car.carId);
-        return {
-          ...car,
-          status: state ? this.motionStateService.toFrontendStatus(state.state) : 'offline',
-          statusSince: state?.anchorTime ?? null,
-        };
-      }),
-    );
+    const dataWithStatus = data.map((car) => ({
+      ...car,
+      status: this.getStatusFromData(car.speed, car.ignition),
+    }));
 
     return {
       data: dataWithStatus,

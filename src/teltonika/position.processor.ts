@@ -1,7 +1,6 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { PositionService } from './position.service';
-import { MotionStateService } from './motion-state.service';
 import { SaveRecordsJobData } from '@/teltonika/position.job';
 import { Logger } from '@nestjs/common';
 import { GpsRecord } from '@/teltonika/codec8.parser';
@@ -10,7 +9,6 @@ import { GpsRecord } from '@/teltonika/codec8.parser';
 export class PositionProcessor extends WorkerHost {
   constructor(
     private readonly positionService: PositionService,
-    private readonly motionStateService: MotionStateService,
   ) {
     super();
   }
@@ -18,13 +16,9 @@ export class PositionProcessor extends WorkerHost {
   private readonly logger = new Logger('PositionProcessor');
 
   private isValidRecord(record: GpsRecord): boolean {
-    // Faqat koordinata 0,0 va kelajak vaqtni filtrlaymiz
-    // Qolgan barcha data bazaga yoziladi
     if (record.lat === 0 || record.lng === 0) return false;
-
     const recordDate = new Date(record.timestamp);
     if (recordDate.getFullYear() < 2026) return false;
-
     return recordDate.getTime() <= Date.now() + 3600000;
   }
 
@@ -37,51 +31,16 @@ export class PositionProcessor extends WorkerHost {
       timestamp: new Date(r.timestamp),
     }));
 
-    this.logger.debug(
-      `[DEBUG] carId=${carId}: ${hydratedRecords.length} ta record keldi, ` +
-        `birinchi: speed=${hydratedRecords[0]?.speed}, ign=${hydratedRecords[0]?.io?.ignition}, ` +
-        `lat=${hydratedRecords[0]?.lat}, lng=${hydratedRecords[0]?.lng}`,
-    );
+    const validRecords = hydratedRecords.filter((r) => this.isValidRecord(r));
 
-    const validRecords = hydratedRecords.filter((r) => {
-      if (!this.isValidRecord(r)) {
-        this.logger.warn(
-          `[FILTER] carId=${carId}: lat=${r.lat}, lng=${r.lng}, ` +
-            `ign=${r.io.ignition}, sat=${r.satellites}, speed=${r.speed}, ` +
-            `time=${r.timestamp.toISOString()} — SKIP`,
-        );
-        return false;
-      }
-      return true;
-    });
+    if (validRecords.length === 0) return;
 
-    if (validRecords.length === 0) {
-      this.logger.warn(
-        `[FILTER] carId=${carId}: barcha ${hydratedRecords.length} ta record filtrlandi, job skip`,
-      );
-      return;
-    }
-
-    if (validRecords.length < hydratedRecords.length) {
-      this.logger.warn(
-        `[FILTER] carId=${carId}: ${hydratedRecords.length - validRecords.length}/${hydratedRecords.length} ta record filtrlandi`,
-      );
-    }
-
-    this.logger.log(`Job boshlandi: ${job.id}`);
+    this.logger.log(`Job: ${job.id}, carId=${carId}, records=${validRecords.length}`);
     await this.positionService.saveRecords(
       carId,
       validRecords,
       deviceId,
       bytesReceived,
     );
-
-    try {
-      this.logger.debug(`[DEBUG] carId=${carId}: motionState.processRecords chaqirilmoqda, ${validRecords.length} ta record`);
-      await this.motionStateService.processRecords(carId, validRecords);
-      this.logger.debug(`[DEBUG] carId=${carId}: motionState.processRecords tugadi`);
-    } catch (error) {
-      this.logger.error(`[ERROR] MotionState xato: carId=${carId}`, error);
-    }
   }
 }

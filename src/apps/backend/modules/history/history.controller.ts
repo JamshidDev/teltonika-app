@@ -27,7 +27,7 @@ export class HistoryController {
   @Public()
   @Get('route-with-events')
   async getRouteWithEvents(@Query() dto: CarRouteWithEventsDto) {
-    return this.historyService.getCarRouteWithEvents(
+    return this.historyService.getPositionTimeline(
       dto.carId,
       dto.from,
       dto.to,
@@ -37,7 +37,7 @@ export class HistoryController {
   @ApiOperation({ summary: 'Raw positions grouped by hour (24h)' })
   @Get('raw-positions')
   async getRawPositions(@Query() dto: CarRouteWithEventsDto) {
-    return this.historyService.getRawPositions(dto.carId, dto.from, dto.to);
+    return this.historyService.getRawPositions(dto.carId, dto.from, dto.to, dto.tzOffset);
   }
 
   /** Diagnostika: qaysi filter qancha nuqtani yo'q qilayotganini ko'rsatadi */
@@ -49,6 +49,13 @@ export class HistoryController {
       dto.from,
       dto.to,
     );
+  }
+
+  @ApiOperation({ summary: 'Timeline from raw positions (no event table)' })
+  @Public()
+  @Get('position-timeline')
+  async getPositionTimeline(@Query() dto: CarRouteWithEventsDto) {
+    return this.historyService.getPositionTimeline(dto.carId, dto.from, dto.to);
   }
 
   @ApiOperation({ summary: 'Device traffic stats — car, device, driver, total bytes' })

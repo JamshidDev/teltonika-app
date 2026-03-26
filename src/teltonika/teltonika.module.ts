@@ -6,8 +6,6 @@ import { PositionService } from './position.service';
 import { PositionProcessor } from './position.processor';
 import { POSITION_QUEUE } from './position.job';
 import { GatewayModule } from '@/shared/gateway/gateway.module';
-import { MotionStateService } from '@/teltonika/motion-state.service';
-import { MotionConfig } from '@/shared/config/motion.config';
 import { RouteConfig } from '@/shared/config/route.config';
 
 @Module({
@@ -17,10 +15,7 @@ import { RouteConfig } from '@/shared/config/route.config';
     Codec8Parser,
     PositionService,
     PositionProcessor,
-    MotionStateService,
-    MotionConfig,
     RouteConfig,
   ],
-  exports: [MotionStateService,]
 })
 export class TeltonikaModule {}

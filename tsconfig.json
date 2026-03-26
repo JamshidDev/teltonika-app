@@ -23,5 +23,6 @@
 
     "skipLibCheck": true,
     "strictNullChecks": true
-  }
+  },
+  "exclude": ["frontend", "node_modules", "dist"]
 }

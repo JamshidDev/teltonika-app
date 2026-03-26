@@ -43,4 +43,10 @@ export class CarRouteWithEventsDto {
   @ApiProperty({ example: '2026-02-22T23:59:59Z' })
   @IsDateString()
   to: string;
+
+  @ApiProperty({ required: false, example: 300, description: 'Timezone offset in minutes (e.g. UTC+5 = 300)' })
+  @IsOptional()
+  @IsInt()
+  @Type(() => Number)
+  tzOffset?: number;
 }

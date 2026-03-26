@@ -4,13 +4,12 @@ import { InjectDb } from '@/shared/database/database.provider';
 import {
   carPositions,
   cars,
-  carStopEvents,
   carDevices,
   carDrivers,
   devices,
   drivers,
 } from '@/shared/database/schema';
-import { and, between, count, desc, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, between, count, desc, eq, isNull, sql } from 'drizzle-orm';
 import { CarHistoryDto, CarRouteDto } from './history.dto';
 import simplify from '@turf/simplify';
 import { lineString } from '@turf/helpers';
@@ -134,62 +133,8 @@ export class HistoryService {
     return this.simplifyRoute(smoothed);
   }
 
-  async getCarRouteWithEvents(carId: number, from: string, to: string) {
-    const dayStart = new Date(from);
-    const dayEnd = new Date(to);
-
-    // 1. Stop/parking eventlar
-    const events = await this.db
-      .select({
-        type: carStopEvents.type,
-        startAt: carStopEvents.startAt,
-        endAt: carStopEvents.endAt,
-        durationSeconds: carStopEvents.durationSeconds,
-        lat: carStopEvents.latitude,
-        lng: carStopEvents.longitude,
-      })
-      .from(carStopEvents)
-      .where(
-        and(
-          eq(carStopEvents.carId, carId),
-          or(
-            between(carStopEvents.startAt, dayStart, dayEnd),
-            and(
-              sql`${carStopEvents.startAt} < ${dayStart}`,
-              or(
-                between(carStopEvents.endAt, dayStart, dayEnd),
-                sql`${carStopEvents.endAt} IS NULL`,
-              ),
-            ),
-          ),
-        ),
-      )
-      .orderBy(carStopEvents.startAt);
-
-    // 2. Route nuqtalari — movement-based (ignition-dan mustaqil)
-    const rawPoints = await this.queryRoutePoints(carId, dayStart, dayEnd);
-
-    // Pipeline: filter → chain
-    const routePoints = this.filterRouteChain(rawPoints);
-
-    const clippedEvents = this.clipEventsToRange(events, dayStart, dayEnd);
-    const mergedEvents = this.mergeConsecutiveEvents(clippedEvents, routePoints);
-
-    // 3. Timeline yaratish (snap + confidence + validation)
-    const timeline = this.buildTimeline(routePoints, mergedEvents);
-
-    return {
-      carId,
-      from,
-      to,
-      totalEvents: mergedEvents.length,
-      totalRoutePoints: routePoints.length,
-      timeline,
-    };
-  }
-
   /** Raw pozitsiyalar — filtrsiz, debugging uchun */
-  async getRawPositions(carId: number, from: string, to: string) {
+  async getRawPositions(carId: number, from: string, to: string, tzOffset?: number) {
     const result = await this.db.execute(sql`
       SELECT latitude    as lat,
              longitude   as lng,
@@ -223,8 +168,12 @@ export class HistoryService {
       hours[h] = [];
     }
 
+    // tzOffset = daqiqalardagi offset (masalan UTC+5 = 300)
+    const offsetMs = (tzOffset ?? 0) * 60 * 1000;
+
     for (const p of points) {
-      const hour = new Date(p.recordedAt).getUTCHours();
+      const localTime = new Date(new Date(p.recordedAt).getTime() + offsetMs);
+      const hour = localTime.getUTCHours();
       hours[hour].push(p);
     }
 
@@ -1079,6 +1028,284 @@ export class HistoryService {
         Math.cos((lat2 * Math.PI) / 180) *
         Math.sin(dLng / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  // ─── Position-based Timeline ───
+
+  /**
+   * Position'lardan timeline qurish — event table'ga bog'liq emas.
+   * Har bir position'ga status beriladi (moving/stopped/parking),
+   * ketma-ket bir xil statuslar guruhlanadi, qisqa event'lar filtrlanadi.
+   */
+  async getPositionTimeline(carId: number, from: string, to: string) {
+    // 1. Barcha position'larni olish (filtr yo'q — barcha data)
+    const rows = await this.db
+      .select({
+        lat: carPositions.latitude,
+        lng: carPositions.longitude,
+        speed: carPositions.speed,
+        angle: carPositions.angle,
+        ignition: carPositions.ignition,
+        satellites: carPositions.satellites,
+        recordedAt: carPositions.recordedAt,
+      })
+      .from(carPositions)
+      .where(
+        and(
+          eq(carPositions.carId, carId),
+          between(
+            carPositions.recordedAt,
+            new Date(from),
+            new Date(to),
+          ),
+          sql`${carPositions.latitude} != 0`,
+          sql`${carPositions.longitude} != 0`,
+        ),
+      )
+      .orderBy(carPositions.recordedAt);
+
+    if (rows.length === 0) {
+      return { carId, from, to, totalPositions: 0, timeline: [] };
+    }
+
+    // 2. Har bir position'ga status berish
+    type PosStatus = 'moving' | 'stopped' | 'parking';
+    interface TaggedPos {
+      lat: number;
+      lng: number;
+      speed: number;
+      angle: number | null;
+      ignition: boolean;
+      satellites: number | null;
+      recordedAt: Date;
+      status: PosStatus;
+    }
+
+    const tagged: TaggedPos[] = rows.map((r) => ({
+      lat: r.lat,
+      lng: r.lng,
+      speed: r.speed ?? 0,
+      angle: r.angle,
+      ignition: r.ignition ?? true,
+      satellites: r.satellites,
+      recordedAt: r.recordedAt,
+      status: ((): PosStatus => {
+        if (r.ignition === false) return 'parking';
+        if ((r.speed ?? 0) === 0) return 'stopped';
+        return 'moving';
+      })(),
+    }));
+
+    // 3. Ketma-ket bir xil statuslarni guruhlash
+    interface RawGroup {
+      status: PosStatus;
+      points: TaggedPos[];
+      startAt: Date;
+      endAt: Date;
+    }
+
+    const groups: RawGroup[] = [];
+    let currentGroup: RawGroup | null = null;
+
+    for (const pos of tagged) {
+      if (!currentGroup || currentGroup.status !== pos.status) {
+        if (currentGroup) {
+          currentGroup.endAt = currentGroup.points[currentGroup.points.length - 1].recordedAt;
+          groups.push(currentGroup);
+        }
+        currentGroup = {
+          status: pos.status,
+          points: [pos],
+          startAt: pos.recordedAt,
+          endAt: pos.recordedAt,
+        };
+      } else {
+        currentGroup.points.push(pos);
+      }
+    }
+    if (currentGroup) {
+      currentGroup.endAt = currentGroup.points[currentGroup.points.length - 1].recordedAt;
+      groups.push(currentGroup);
+    }
+
+    // 4. Qisqa stop/parking'larni moving'ga merge qilish
+    const MIN_STOP_DURATION = 180; // 3 daqiqa
+    const MIN_PARKING_DURATION = 120; // 2 daqiqa
+
+    const filtered: RawGroup[] = [];
+    for (const g of groups) {
+      const duration = (g.endAt.getTime() - g.startAt.getTime()) / 1000;
+
+      if (g.status === 'stopped' && duration < MIN_STOP_DURATION) {
+        // Qisqa stop → moving ga o'zgartirish
+        filtered.push({ ...g, status: 'moving' });
+      } else if (g.status === 'parking' && duration < MIN_PARKING_DURATION) {
+        // Qisqa parking → moving ga o'zgartirish
+        filtered.push({ ...g, status: 'moving' });
+      } else {
+        filtered.push(g);
+      }
+    }
+
+    // 5. Qayta guruhlash (qisqa event'lar moving bo'lgani uchun yonma-yon moving'lar birlashadi)
+    const merged: RawGroup[] = [];
+    for (const g of filtered) {
+      const last = merged[merged.length - 1];
+      if (last && last.status === g.status) {
+        last.points.push(...g.points);
+        last.endAt = g.endAt;
+      } else {
+        merged.push({ ...g, points: [...g.points] });
+      }
+    }
+
+    // 6. Yaqin event'larni birlashtirish (Stop+Parking → bir joyda bo'lsa merge)
+    const MERGE_GAP = 60; // 1 daqiqa
+    const MERGE_DISTANCE = 100; // 100 metr
+
+    const finalGroups: RawGroup[] = [];
+    for (const g of merged) {
+      const last = finalGroups[finalGroups.length - 1];
+
+      if (
+        last &&
+        (last.status === 'stopped' || last.status === 'parking') &&
+        (g.status === 'stopped' || g.status === 'parking')
+      ) {
+        const gap = (g.startAt.getTime() - last.endAt.getTime()) / 1000;
+        const lastPt = last.points[last.points.length - 1];
+        const firstPt = g.points[0];
+        const dist = this.calculateDistance(lastPt.lat, lastPt.lng, firstPt.lat, firstPt.lng);
+
+        if (gap <= MERGE_GAP && dist <= MERGE_DISTANCE) {
+          // Merge — parking ustunlik oladi
+          last.status = last.status === 'parking' || g.status === 'parking' ? 'parking' : 'stopped';
+          last.points.push(...g.points);
+          last.endAt = g.endAt;
+          continue;
+        }
+      }
+
+      finalGroups.push({ ...g, points: [...g.points] });
+    }
+
+    // 7. Qisqa route'larni olib tashlash (< 50m) va yonidagi event'larni merge
+    const ROUTE_MIN_DISTANCE = 50; // metr
+    const EVENT_MERGE_DISTANCE = 50; // metr
+
+    const cleaned: RawGroup[] = [];
+    for (const g of finalGroups) {
+      if (g.status === 'moving') {
+        // Route masofasini hisoblash
+        let routeMeters = 0;
+        for (let i = 1; i < g.points.length; i++) {
+          routeMeters += this.calculateDistance(
+            g.points[i - 1].lat, g.points[i - 1].lng,
+            g.points[i].lat, g.points[i].lng,
+          );
+        }
+        if (routeMeters < ROUTE_MIN_DISTANCE) {
+          // 50m dan kam route — skip, nuqtalarni oldingi event'ga qo'shish
+          const prev = cleaned[cleaned.length - 1];
+          if (prev && prev.status !== 'moving') {
+            prev.points.push(...g.points);
+            prev.endAt = g.endAt;
+          }
+          continue;
+        }
+      }
+      cleaned.push(g);
+    }
+
+    // 8. Yonma-yon event'larni merge (route olib tashlangandan keyin)
+    const timeline2: RawGroup[] = [];
+    for (const g of cleaned) {
+      const last = timeline2[timeline2.length - 1];
+      if (
+        last &&
+        last.status !== 'moving' && g.status !== 'moving'
+      ) {
+        const lastPt = last.points[last.points.length - 1];
+        const firstPt = g.points[0];
+        const dist = this.calculateDistance(lastPt.lat, lastPt.lng, firstPt.lat, firstPt.lng);
+
+        if (dist <= EVENT_MERGE_DISTANCE) {
+          // Bir joyda — merge
+          last.status = last.status === 'parking' || g.status === 'parking' ? 'parking' : 'stopped';
+          last.points.push(...g.points);
+          last.endAt = g.endAt;
+          continue;
+        }
+      }
+      timeline2.push(g);
+    }
+
+    // 9. Timeline qurish
+    const timeline: any[] = [];
+
+    for (const g of timeline2) {
+      const duration = Math.round((g.endAt.getTime() - g.startAt.getTime()) / 1000);
+
+      if (g.status === 'moving') {
+        // Route segment
+        const routePoints: RoutePoint[] = g.points.map((p) => ({
+          lat: p.lat,
+          lng: p.lng,
+          speed: p.speed,
+          angle: p.angle,
+          recordedAt: p.recordedAt,
+        }));
+
+        const simplified = this.simplifyRoute(routePoints);
+        let totalMeters = 0;
+        for (let i = 1; i < simplified.length; i++) {
+          totalMeters += this.calculateDistance(
+            simplified[i - 1].lat, simplified[i - 1].lng,
+            simplified[i].lat, simplified[i].lng,
+          );
+        }
+        const distance = Math.round((totalMeters / 1000) * 10) / 10;
+
+        timeline.push({
+          type: 'route',
+          points: simplified,
+          startPoint: { lat: simplified[0].lat, lng: simplified[0].lng },
+          endPoint: { lat: simplified[simplified.length - 1].lat, lng: simplified[simplified.length - 1].lng },
+          distance,
+          duration,
+          startAt: g.startAt.toISOString(),
+          endAt: g.endAt.toISOString(),
+        });
+      } else {
+        // Stop yoki Parking event
+        // Centroid — barcha nuqtalarning o'rtachasi
+        const avgLat = g.points.reduce((s, p) => s + p.lat, 0) / g.points.length;
+        const avgLng = g.points.reduce((s, p) => s + p.lng, 0) / g.points.length;
+
+        timeline.push({
+          type: g.status === 'parking' ? 'parking' : 'stop',
+          lat: Math.round(avgLat * 1e7) / 1e7,
+          lng: Math.round(avgLng * 1e7) / 1e7,
+          startAt: g.startAt.toISOString(),
+          endAt: g.endAt.toISOString(),
+          duration,
+          pointCount: g.points.length,
+        });
+      }
+    }
+
+    return {
+      carId,
+      from,
+      to,
+      totalPositions: rows.length,
+      totalEvents: timeline.filter((t) => t.type !== 'route').length,
+      totalRouteSegments: timeline.filter((t) => t.type === 'route').length,
+      totalRoutePoints: timeline
+        .filter((t) => t.type === 'route')
+        .reduce((s, t) => s + t.points.length, 0),
+      timeline,
+    };
   }
 
   // ─── Traffic stats ───

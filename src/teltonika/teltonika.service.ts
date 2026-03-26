@@ -117,6 +117,9 @@ export class TeltonikaService implements OnModuleInit {
 
         if (session.carId) {
           const last = parsed.records[parsed.records.length - 1];
+          const status = last.io.ignition === false ? 'parking'
+            : (last.speed ?? 0) === 0 ? 'stopped'
+            : 'moving';
           this.trackingGateway.emitCarLocation({
             carId: session.carId,
             lat: last.lat,
@@ -125,6 +128,7 @@ export class TeltonikaService implements OnModuleInit {
             angle: last.angle,
             ignition: last.io.ignition,
             movement: last.io.movement,
+            status,
           });
 
           await this.positionQueue.add(POSITION_JOBS.SAVE_RECORDS, {
