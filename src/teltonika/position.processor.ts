@@ -5,7 +5,6 @@ import { MotionStateService } from './motion-state.service';
 import { SaveRecordsJobData } from '@/teltonika/position.job';
 import { Logger } from '@nestjs/common';
 import { GpsRecord } from '@/teltonika/codec8.parser';
-import { MOTION } from '@/teltonika/motion-state.constants';
 
 @Processor('gps-position')
 export class PositionProcessor extends WorkerHost {
@@ -19,12 +18,9 @@ export class PositionProcessor extends WorkerHost {
   private readonly logger = new Logger('PositionProcessor');
 
   private isValidRecord(record: GpsRecord): boolean {
+    // Faqat koordinata 0,0 va kelajak vaqtni filtrlaymiz
+    // Qolgan barcha data bazaga yoziladi
     if (record.lat === 0 || record.lng === 0) return false;
-
-    if (record.io.ignition === null) return false;
-
-    // Satellite < 2 = GPS fix yo'q (hard discard). 2-3 = low quality (DB ga saqlash)
-    if (record.satellites < MOTION.MIN_SATELLITES_SAVE) return false;
 
     const recordDate = new Date(record.timestamp);
     if (recordDate.getFullYear() < 2026) return false;

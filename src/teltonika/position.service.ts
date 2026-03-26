@@ -292,23 +292,10 @@ export class PositionService {
       const prevEventAt = lastEvent?.eventAt ?? null;
       const driverId = currentDriverResult[0]?.driverId ?? null;
 
-      // GPS sakrashlarni filtrlash — ishonchsiz nuqtalar discard
-      const reliableRecords = this.filterReliableRecords(records, lastPos);
-
-      if (reliableRecords.length === 0) {
-        this.logger.warn(`carId=${carId}: barcha recordlar GPS filter bilan discard qilindi`);
-        return;
-      }
-
-      if (reliableRecords.length < records.length) {
-        this.logger.warn(
-          `carId=${carId}: ${records.length - reliableRecords.length}/${records.length} ta record GPS filter bilan discard`,
-        );
-      }
-
+      // Barcha data bazaga yoziladi — filtr yo'q
       const positionValues = this.buildPositionValues(
         carId,
-        reliableRecords,
+        records,
         deviceId,
         driverId,
         lastPos,
@@ -317,7 +304,7 @@ export class PositionService {
 
       const engineEvents = this.processEngineEvents(
         carId,
-        reliableRecords,
+        records,
         prevIgnition,
         prevEventAt,
       );
@@ -329,10 +316,10 @@ export class PositionService {
           await tx.insert(carEngineEvents).values(engineEvents);
         }
 
-        if (!reliableRecords.length) {
+        if (!records.length) {
           throw Error('No records');
         }
-        const last = reliableRecords[reliableRecords.length - 1];
+        const last = records[records.length - 1];
         const values = {
           carId,
           latitude: last.lat,
