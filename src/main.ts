@@ -6,7 +6,11 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { GlobalExceptionFilter } from '@/shared/exceptions/global-exception.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    // Prod log hajmini cheklash: debug/verbose o'chirilgan.
+    // Har-paket/har-record loglar debug darajasida — bu yerda chiqmaydi.
+    logger: ['log', 'warn', 'error'],
+  });
   app.enableCors({
     origin: true,
     credentials: true,

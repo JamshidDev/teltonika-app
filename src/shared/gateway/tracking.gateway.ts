@@ -21,7 +21,7 @@ export class TrackingGateway
   private readonly logger = new Logger('TrackingGateway');
 
   handleConnection(client: Socket) {
-    this.logger.log(`Client ulandi: ${client.id}`);
+    this.logger.debug(`Client ulandi: ${client.id}`);
   }
 
   handleDisconnect(client: Socket) {
@@ -30,7 +30,7 @@ export class TrackingGateway
 
   @SubscribeMessage('track:subscribe')
   handleSubscribe(client: Socket) {
-    this.logger.log(`Client subscribe: ${client.id}`);
+    this.logger.debug(`Client subscribe: ${client.id}`);
     void client.join('tracking');
   }
 
@@ -53,7 +53,7 @@ export class TrackingGateway
     movement: boolean | null;
     status: string;
   }) {
-    this.logger.log(`Emit car:location carId: ${data.carId}`);
+    this.logger.debug(`Emit car:location carId: ${data.carId}`);
     this.server.to('tracking').emit('car:location', data);
   }
 

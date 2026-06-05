@@ -35,7 +35,7 @@ export class PositionProcessor extends WorkerHost {
 
     if (validRecords.length === 0) return;
 
-    this.logger.log(`Job: ${job.id}, carId=${carId}, records=${validRecords.length}`);
+    this.logger.debug(`Job: ${job.id}, carId=${carId}, records=${validRecords.length}`);
     await this.positionService.saveRecords(
       carId,
       validRecords,

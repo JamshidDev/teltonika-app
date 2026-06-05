@@ -42,13 +42,13 @@ export class TeltonikaService implements OnModuleInit {
         deviceId: null,
         buffer: Buffer.alloc(0),
       });
-      this.logger.log(`Yangi ulanish: ${socket.remoteAddress}`);
+      this.logger.debug(`Yangi ulanish: ${socket.remoteAddress}`);
 
       socket.on('data', (data) => void this.handleData(socket, data));
       socket.on('error', (err) => this.logger.error(err.message));
       socket.on('close', () => {
         const session = this.sessions.get(socket);
-        this.logger.log(`Uzildi: ${session?.imei || "noma'lum"}`);
+        this.logger.debug(`Uzildi: ${session?.imei || "noma'lum"}`);
         this.sessions.delete(socket);
       });
     });
@@ -74,7 +74,7 @@ export class TeltonikaService implements OnModuleInit {
         .toString('ascii')
         .replace(/[^\x20-\x7E]/g, '')
         .trim();
-      this.logger.log(`IMEI: ${session.imei}`);
+      this.logger.debug(`IMEI: ${session.imei}`);
 
       const car = await this.positionService.findCarByImei(session.imei);
       if (!car) {
@@ -110,9 +110,9 @@ export class TeltonikaService implements OnModuleInit {
 
       try {
         const parsed = this.codec8Parser.parse(packet);
-        this.logger.log(`${session.imei}: ${parsed.records.length} ta record`);
-        this.logger.log(
-          `Codec: 0x${parsed.codecId.toString(16)}, records: ${parsed.records.length}`,
+        this.logger.debug(
+          `${session.imei}: ${parsed.records.length} ta record, ` +
+            `Codec: 0x${parsed.codecId.toString(16)}`,
         );
 
         if (session.carId) {

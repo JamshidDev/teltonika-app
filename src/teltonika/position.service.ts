@@ -257,7 +257,7 @@ export class PositionService {
     bytesReceived?: number,
   ) {
     try {
-      this.logger.log(
+      this.logger.debug(
         `saveRecords boshlandi, carId: ${carId}, records: ${records.length}`,
       );
 
@@ -344,7 +344,7 @@ export class PositionService {
           .onConflictDoUpdate({ target: carLastPositions.carId, set: values });
       });
 
-      this.logger.log('saveRecords tugadi ✅');
+      this.logger.debug('saveRecords tugadi ✅');
     } catch (error) {
       this.logger.error('saveRecords xato:', error);
       throw error;
