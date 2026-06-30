@@ -30,7 +30,7 @@ import { ScheduleModule } from '@nestjs/schedule';
       isGlobal: true,
       inject: [RedisConfig],
       useFactory: (config: RedisConfig) => {
-        const redisUrl = `redis://${config.host}:${config.port}`;
+        const redisUrl = `redis://${config.host}:${config.port}/${config.db}`;
         return {
           stores: [new KeyvRedis(redisUrl), new Keyv()],
         };
@@ -42,6 +42,7 @@ import { ScheduleModule } from '@nestjs/schedule';
         connection: {
           host: config.host,
           port: config.port,
+          db: config.db,
         },
       }),
     }),

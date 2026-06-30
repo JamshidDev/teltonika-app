@@ -10,4 +10,11 @@ export class RedisConfig {
     default: 6379,
   })
   port!: number;
+
+  // Shared Redis instance — boshqa projectlardan izolyatsiya uchun alohida DB index.
+  @Value('REDIS_DB', {
+    parse: (v) => parseInt(v as string, 10),
+    default: 0,
+  })
+  db!: number;
 }
