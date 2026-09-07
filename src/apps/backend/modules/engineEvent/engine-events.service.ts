@@ -9,12 +9,13 @@ import { EngineEventsQueryDto } from './engine-events.dto';
 export class EngineEventsService {
   constructor(@InjectDb() private db: DataSource) {}
 
-  async findAll(dto: EngineEventsQueryDto) {
+  async findAll(dto: EngineEventsQueryDto, userId: number) {
     const page = Math.max(dto.page ?? 1, 1);
     const pageSize = Math.min(Math.max(dto.pageSize ?? 20, 1), 100);
     const offset = (page - 1) * pageSize;
 
-    const conditions: SQL[] = [];
+    // Faqat shu foydalanuvchining mashinalari.
+    const conditions: SQL[] = [eq(cars.userId, userId)];
 
     if (dto.carId) {
       conditions.push(eq(carEngineEvents.carId, dto.carId));
@@ -27,7 +28,7 @@ export class EngineEventsService {
       conditions.push(lte(carEngineEvents.eventAt, dayEnd));
     }
 
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const whereClause = and(...conditions);
 
     const [data, countResult] = await Promise.all([
       this.db
@@ -42,7 +43,7 @@ export class EngineEventsService {
           longitude: carEngineEvents.longitude,
         })
         .from(carEngineEvents)
-        .leftJoin(cars, eq(carEngineEvents.carId, cars.id))
+        .innerJoin(cars, eq(carEngineEvents.carId, cars.id))
         .where(whereClause)
         .orderBy(desc(carEngineEvents.eventAt))
         .offset(offset)
@@ -51,6 +52,7 @@ export class EngineEventsService {
       this.db
         .select({ total: count() })
         .from(carEngineEvents)
+        .innerJoin(cars, eq(carEngineEvents.carId, cars.id))
         .where(whereClause),
     ]);
 

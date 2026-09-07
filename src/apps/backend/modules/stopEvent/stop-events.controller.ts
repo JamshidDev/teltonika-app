@@ -1,5 +1,6 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { GetUser } from '@/shared/decarators/get-user.decorator';
 import { StopEventsService } from './stop-events.service';
 import { StopEventsQueryDto } from './stop-events.dto';
 
@@ -10,7 +11,7 @@ export class StopEventsController {
   constructor(private readonly stopEventsService: StopEventsService) {}
 
   @Get()
-  findAll(@Query() dto: StopEventsQueryDto) {
-    return this.stopEventsService.findAll(dto);
+  findAll(@Query() dto: StopEventsQueryDto, @GetUser('id') userId: number) {
+    return this.stopEventsService.findAll(dto, userId);
   }
 }

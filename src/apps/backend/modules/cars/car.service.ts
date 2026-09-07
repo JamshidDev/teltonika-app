@@ -31,7 +31,7 @@ export class CarService {
     return 'moving';
   }
 
-  async findAll(dto: PaginationDto) {
+  async findAll(dto: PaginationDto, userId: number) {
     const page = Math.max(dto.page ?? 1, 1);
     const pageSize = Math.min(Math.max(dto.pageSize ?? 20, 1), 100);
     const offset = (page - 1) * pageSize;
@@ -59,14 +59,14 @@ export class CarService {
           and(eq(carDrivers.carId, cars.id), isNull(carDrivers.endAt)),
         )
         .leftJoin(drivers, eq(drivers.id, carDrivers.driverId))
-        .where(isNull(cars.deletedAt))
+        .where(and(eq(cars.userId, userId), isNull(cars.deletedAt)))
         .offset(offset)
         .limit(pageSize),
 
       this.db
         .select({ total: count() })
         .from(cars)
-        .where(isNull(cars.deletedAt)),
+        .where(and(eq(cars.userId, userId), isNull(cars.deletedAt))),
     ]);
 
     const total = Number(countResult[0]?.total ?? 0);
@@ -132,11 +132,13 @@ export class CarService {
     return car;
   }
 
-  async update(id: number, dto: UpdateCarDto) {
+  async update(id: number, dto: UpdateCarDto, userId: number) {
     const existing = await this.db
       .select()
       .from(cars)
-      .where(and(eq(cars.id, id), isNull(cars.deletedAt)))
+      .where(
+        and(eq(cars.id, id), eq(cars.userId, userId), isNull(cars.deletedAt)),
+      )
       .limit(1);
 
     if (!existing[0]) {
@@ -196,11 +198,13 @@ export class CarService {
     return updated;
   }
 
-  async remove(id: number) {
+  async remove(id: number, userId: number) {
     const existing = await this.db
       .select()
       .from(cars)
-      .where(and(eq(cars.id, id), isNull(cars.deletedAt)))
+      .where(
+        and(eq(cars.id, id), eq(cars.userId, userId), isNull(cars.deletedAt)),
+      )
       .limit(1);
 
     if (!existing[0]) {
@@ -226,11 +230,13 @@ export class CarService {
     return { deleted: true };
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, userId: number) {
     const result = await this.db
       .select()
       .from(cars)
-      .where(and(eq(cars.id, id), isNull(cars.deletedAt)))
+      .where(
+        and(eq(cars.id, id), eq(cars.userId, userId), isNull(cars.deletedAt)),
+      )
       .limit(1);
 
     if (!result[0]) {
@@ -240,7 +246,7 @@ export class CarService {
     return result[0];
   }
 
-  async getLastPositions(dto: PaginationDto) {
+  async getLastPositions(dto: PaginationDto, userId: number) {
     const page = Math.max(dto.page ?? 1, 1);
     const pageSize = Math.min(Math.max(dto.pageSize ?? 20, 1), 100);
     const offset = (page - 1) * pageSize;
@@ -261,7 +267,7 @@ export class CarService {
         })
         .from(cars)
         .innerJoin(carLastPositions, eq(cars.id, carLastPositions.carId))
-        .where(isNull(cars.deletedAt))
+        .where(and(eq(cars.userId, userId), isNull(cars.deletedAt)))
         .orderBy(
           sql`${carLastPositions.updatedAt}
           DESC NULLS LAST`,
@@ -273,7 +279,7 @@ export class CarService {
         .select({ total: count() })
         .from(cars)
         .innerJoin(carLastPositions, eq(cars.id, carLastPositions.carId))
-        .where(isNull(cars.deletedAt)),
+        .where(and(eq(cars.userId, userId), isNull(cars.deletedAt))),
     ]);
 
     const total = Number(countResult[0]?.total ?? 0);

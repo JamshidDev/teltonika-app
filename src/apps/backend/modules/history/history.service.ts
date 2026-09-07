@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
 import {
@@ -53,13 +53,32 @@ export class HistoryService {
     private readonly routeConfig: RouteConfig,
   ) {}
 
-  async getCarPositions(dto: CarHistoryDto) {
+  /** Mashina shu foydalanuvchiga tegishliligini tekshiradi. */
+  private async assertCarAccess(carId: number, userId: number) {
+    const owned = await this.db
+      .select({ id: cars.id })
+      .from(cars)
+      .where(
+        and(eq(cars.id, carId), eq(cars.userId, userId), isNull(cars.deletedAt)),
+      )
+      .limit(1);
+
+    if (!owned[0]) {
+      throw new ForbiddenException('Bu mashinaga ruxsat yo\'q');
+    }
+  }
+
+  async getCarPositions(dto: CarHistoryDto, userId: number) {
     const page = Math.max(dto.page ?? 1, 1);
     const pageSize = Math.min(Math.max(dto.pageSize ?? 20, 1), 100);
     const offset = (page - 1) * pageSize;
+    if (dto.carId) {
+      await this.assertCarAccess(dto.carId, userId);
+    }
+
     const whereClause = dto.carId
-      ? eq(carPositions.carId, dto.carId)
-      : undefined;
+      ? and(eq(carPositions.carId, dto.carId), eq(cars.userId, userId))
+      : eq(cars.userId, userId);
 
     const [data, countResult] = await Promise.all([
       this.db
@@ -91,7 +110,7 @@ export class HistoryService {
           },
         })
         .from(carPositions)
-        .leftJoin(cars, eq(carPositions.carId, cars.id))
+        .innerJoin(cars, eq(carPositions.carId, cars.id))
         .leftJoin(devices, eq(carPositions.deviceId, devices.id))
         .leftJoin(drivers, eq(carPositions.driverId, drivers.id))
         .where(whereClause)
@@ -99,7 +118,11 @@ export class HistoryService {
         .offset(offset)
         .limit(pageSize),
 
-      this.db.select({ total: count() }).from(carPositions).where(whereClause),
+      this.db
+        .select({ total: count() })
+        .from(carPositions)
+        .innerJoin(cars, eq(carPositions.carId, cars.id))
+        .where(whereClause),
     ]);
 
     const total = Number(countResult[0]?.total ?? 0);
@@ -118,7 +141,9 @@ export class HistoryService {
     };
   }
 
-  async getCarRoute(dto: CarRouteDto) {
+  async getCarRoute(dto: CarRouteDto, userId: number) {
+    await this.assertCarAccess(dto.carId, userId);
+
     const rawPoints = await this.queryRoutePoints(
       dto.carId,
       new Date(dto.from),
@@ -134,7 +159,15 @@ export class HistoryService {
   }
 
   /** Raw pozitsiyalar — filtrsiz, debugging uchun */
-  async getRawPositions(carId: number, from: string, to: string, tzOffset?: number) {
+  async getRawPositions(
+    carId: number,
+    userId: number,
+    from: string,
+    to: string,
+    tzOffset?: number,
+  ) {
+    await this.assertCarAccess(carId, userId);
+
     const result = await this.db.execute(sql`
       SELECT latitude    as lat,
              longitude   as lng,
@@ -197,7 +230,14 @@ export class HistoryService {
    * DIAGNOSTIKA: Qaysi filter qancha nuqtani yo'q qilayotganini ko'rsatadi.
    * Production da o'chirib qo'yish mumkin.
    */
-  async diagnosRouteFilters(carId: number, from: string, to: string) {
+  async diagnosRouteFilters(
+    carId: number,
+    userId: number,
+    from: string,
+    to: string,
+  ) {
+    await this.assertCarAccess(carId, userId);
+
     const fromDate = new Date(from);
     const toDate = new Date(to);
 
@@ -1037,7 +1077,14 @@ export class HistoryService {
    * Har bir position'ga status beriladi (moving/stopped/parking),
    * ketma-ket bir xil statuslar guruhlanadi, qisqa event'lar filtrlanadi.
    */
-  async getPositionTimeline(carId: number, from: string, to: string) {
+  async getPositionTimeline(
+    carId: number,
+    userId: number,
+    from: string,
+    to: string,
+  ) {
+    await this.assertCarAccess(carId, userId);
+
     // 1. Barcha position'larni olish (filtr yo'q — barcha data)
     const rows = await this.db
       .select({
@@ -1310,7 +1357,14 @@ export class HistoryService {
 
   // ─── Traffic stats ───
 
-  async getTrafficStats(carId: number, from: string, to: string) {
+  async getTrafficStats(
+    carId: number,
+    userId: number,
+    from: string,
+    to: string,
+  ) {
+    await this.assertCarAccess(carId, userId);
+
     const fromDate = new Date(from);
     const toDate = new Date(to);
 

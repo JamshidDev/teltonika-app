@@ -6,7 +6,7 @@ import {
   CarRouteWithEventsDto,
 } from './history.dto';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Public } from '@/shared/decarators/public.decorator';
+import { GetUser } from '@/shared/decarators/get-user.decorator';
 
 @ApiBearerAuth()
 @ApiTags('History')
@@ -15,20 +15,26 @@ export class HistoryController {
   constructor(private readonly historyService: HistoryService) {}
 
   @Get('positions')
-  getCarPositions(@Query() dto: CarHistoryDto) {
-    return this.historyService.getCarPositions(dto);
+  getCarPositions(
+    @Query() dto: CarHistoryDto,
+    @GetUser('id') userId: number,
+  ) {
+    return this.historyService.getCarPositions(dto, userId);
   }
 
   @Get('route')
-  getCarRoute(@Query() dto: CarRouteDto) {
-    return this.historyService.getCarRoute(dto);
+  getCarRoute(@Query() dto: CarRouteDto, @GetUser('id') userId: number) {
+    return this.historyService.getCarRoute(dto, userId);
   }
 
-  @Public()
   @Get('route-with-events')
-  async getRouteWithEvents(@Query() dto: CarRouteWithEventsDto) {
+  async getRouteWithEvents(
+    @Query() dto: CarRouteWithEventsDto,
+    @GetUser('id') userId: number,
+  ) {
     return this.historyService.getPositionTimeline(
       dto.carId,
+      userId,
       dto.from,
       dto.to,
     );
@@ -36,37 +42,67 @@ export class HistoryController {
 
   @ApiOperation({ summary: 'Raw positions grouped by hour (24h)' })
   @Get('raw-positions')
-  async getRawPositions(@Query() dto: CarRouteWithEventsDto) {
-    return this.historyService.getRawPositions(dto.carId, dto.from, dto.to, dto.tzOffset);
+  async getRawPositions(
+    @Query() dto: CarRouteWithEventsDto,
+    @GetUser('id') userId: number,
+  ) {
+    return this.historyService.getRawPositions(
+      dto.carId,
+      userId,
+      dto.from,
+      dto.to,
+      dto.tzOffset,
+    );
   }
 
   /** Diagnostika: qaysi filter qancha nuqtani yo'q qilayotganini ko'rsatadi */
-  @Public()
   @Get('diagnose-filters')
-  async diagnoseFilters(@Query() dto: CarRouteWithEventsDto) {
+  async diagnoseFilters(
+    @Query() dto: CarRouteWithEventsDto,
+    @GetUser('id') userId: number,
+  ) {
     return this.historyService.diagnosRouteFilters(
       dto.carId,
+      userId,
       dto.from,
       dto.to,
     );
   }
 
   @ApiOperation({ summary: 'Timeline from raw positions (no event table)' })
-  @Public()
   @Get('position-timeline')
-  async getPositionTimeline(@Query() dto: CarRouteWithEventsDto) {
-    return this.historyService.getPositionTimeline(dto.carId, dto.from, dto.to);
+  async getPositionTimeline(
+    @Query() dto: CarRouteWithEventsDto,
+    @GetUser('id') userId: number,
+  ) {
+    return this.historyService.getPositionTimeline(
+      dto.carId,
+      userId,
+      dto.from,
+      dto.to,
+    );
   }
 
   @ApiOperation({ summary: 'Device traffic stats — car, device, driver, total bytes' })
   @Get('traffic')
-  async getTrafficStats(@Query() dto: CarRouteWithEventsDto) {
-    return this.historyService.getTrafficStats(dto.carId, dto.from, dto.to);
+  async getTrafficStats(
+    @Query() dto: CarRouteWithEventsDto,
+    @GetUser('id') userId: number,
+  ) {
+    return this.historyService.getTrafficStats(
+      dto.carId,
+      userId,
+      dto.from,
+      dto.to,
+    );
   }
 
   @Get('route/geojson')
-  async getCarRouteGeoJson(@Query() dto: CarRouteDto) {
-    const data = await this.historyService.getCarRoute(dto);
+  async getCarRouteGeoJson(
+    @Query() dto: CarRouteDto,
+    @GetUser('id') userId: number,
+  ) {
+    const data = await this.historyService.getCarRoute(dto, userId);
 
     return {
       type: 'Feature',

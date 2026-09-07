@@ -29,19 +29,22 @@ export class CarController {
 
   @Get()
   @ApiPaginatedResponse(CarResponseDto)
-  findAll(@Query() query: PaginationDto) {
-    return this.carService.findAll(query);
+  findAll(@Query() query: PaginationDto, @GetUser('id') userId: number) {
+    return this.carService.findAll(query, userId);
   }
 
   @Get('last-positions')
   @ApiPaginatedResponse(CarResponseDto)
-  getLive(@Query() query: PaginationDto) {
-    return this.carService.getLastPositions(query);
+  getLive(@Query() query: PaginationDto, @GetUser('id') userId: number) {
+    return this.carService.getLastPositions(query, userId);
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.carService.findOne(id);
+  findOne(
+    @Param('id', ParseIntPipe) id: number,
+    @GetUser('id') userId: number,
+  ) {
+    return this.carService.findOne(id, userId);
   }
 
   @Post()
@@ -51,12 +54,19 @@ export class CarController {
   }
 
   @Put(':id')
-  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateCarDto) {
-    return this.carService.update(id, dto);
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateCarDto,
+    @GetUser('id') userId: number,
+  ) {
+    return this.carService.update(id, dto, userId);
   }
 
   @Delete(':id')
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.carService.remove(id);
+  remove(
+    @Param('id', ParseIntPipe) id: number,
+    @GetUser('id') userId: number,
+  ) {
+    return this.carService.remove(id, userId);
   }
 }
