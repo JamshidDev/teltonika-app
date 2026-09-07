@@ -6,6 +6,34 @@ Loyihani eski serverdan **yangi serverga** (`gps.megago.uz` / `195.158.20.195`) 
 
 ---
 
+## 📊 PROGRESS (2026-06-30)
+
+### ✅ Bajarildi (yangi server tayyor, lokal test o'tdi)
+- DB ko'chirildi: `pg_dump -Fc` (318M) → restore → **10.9M car_positions**, cars/devices/users to'liq ✅
+- PostgreSQL: alohida `teltonika` user + `teltonika_db`; **PostGIS 3.4** o'rnatildi (ishlatilmaydi, lekin dump'da bor)
+- Backend: pm2 `teltonika-api` online, `:5027` (GPS) + `:8000` (HTTP), error log toza
+- **Redis izolyatsiya tasdiqlandi:** bizning app **db2** (kod patch + `REDIS_DB=2`), boshqa project **db0** (86k key) buzilmagan
+- Frontend: Vue+Vite build → `dist/`, nginx static + `/api` + `/socket.io` proxy + SPA fallback
+- Lokal test (Host header bilan): index 200, /api 401, SPA 200 ✅
+
+### ⏸️ Qoldi (cutover bloklari)
+- **Gateway/SSL routing:** `gps.megago.uz` public trafik **gateway (195.158.20.195)** ga boradi, u bu VM'ni hali bilmaydi. Panel HTTPS + GPS 5027 marshruti gateway'da sozlanishi kerak ([[3-bo'lim]] va quyida).
+- **GPS qurilma cutover:** 6445 qurilma eski IP `92.246.76.38:5027` da. Yangi serverga o'tkazish kerak.
+- **Delta DB sync:** eski server hali ma'lumot yig'yapti — cutover paytida oxirgi farqni sinxron qilish.
+- **CI/CD:** GitHub Secrets → yangi server (+`port: 1170`).
+- **pm2 startup:** reboot'da avto-start (`pm2 startup` + systemd `LimitNOFILE=65535`).
+- **REDIS_DB commit push:** hozir yangi serverda qo'lda patch — keyin git'ga push qilib sync qilinadi.
+
+### 🏗️ Aniqlangan infratuzilma (MUHIM)
+Yangi VM **reverse-proxy gateway ORQASIDA**:
+```
+Internet → 195.158.20.195 (GATEWAY, SSL shu yerda) → 172.16.30.232 → bu VM:80
+Tashqi portlar: 1170→ssh, 1171→http(:80), 1172→https
+```
+VM'da SSL yo'q (`/etc/letsencrypt/live/` bo'sh), faqat `:80`. certbot HTTP-01 VM'da **fail** bo'ladi (challenge gateway'ga boradi → 404). SSL gateway'da (`lord`/`devices` turgan joyda) sozlanadi.
+
+---
+
 ## 1. Arxitektura (nimani ko'chiramiz)
 
 Bu oddiy web app emas — real **Teltonika GPS qurilmalari** TCP orqali ulanadigan tizim.
@@ -44,24 +72,36 @@ Bu oddiy web app emas — real **Teltonika GPS qurilmalari** TCP orqali ulanadig
 
 ### ✅ Bo'sh portlar
 - `5027` (GPS) — bo'sh ✅
-- `8000` (app) — bo'sh ✅
+- `8000` (app HTTP) — bo'sh ✅
+
+> ℹ️ Eski prodда HTTP porti `PORT=3000`. Yangi serverda `3000` boshqa project bilan to'qnashishi mumkin, shuning uchun yangi serverда **`PORT=8000`** ishlatamiz (nginx ichki proxy target — port raqami ixtiyoriy).
 
 ---
 
-## 3. ⭐ GPS qurilmalar — eng muhim nuqta
+## 3. ⭐⭐ GPS qurilmalar — ENG MUHIM / ENG QIYIN NUQTA
 
-GPS qurilmalar **IP orqali** ulangan, LEKIN DNS tekshiruvi shuni ko'rsatdi:
+Eski serverda live tekshiruv natijasi (faktlar):
 
-```
-gps.megago.uz  →  195.158.20.195  (= aynan yangi server)
-```
+| Narsa | Qiymat |
+|---|---|
+| Eski server public IP | **`92.246.76.38`** |
+| GPS port | `5027` (app `0.0.0.0:5027` eshitadi) |
+| **Online ulangan qurilmalar** | **~6445 ta** |
+| `gps.megago.uz` DNS | `195.158.20.195` (yangi server) |
 
-**Aniqlash kerak:** qurilmalar config'ida **xom IP** yozilganmi yoki **`gps.megago.uz`** domeni?
+**Aniqlangan muammo:** Qurilmalar **xom IP `92.246.76.38`:5027** ga ulangan — `gps.megago.uz` domeniga EMAS. Domen yangi serverni ko'rsatadi, lekin qurilmalar uni ishlatmayapti. Yangi server IP'si boshqa (`195.158.20.195`, boshqa provayder), shuning uchun IP'ni oddiy ko'chirib bo'lmaydi.
 
-- **Agar domen (`gps.megago.uz`)** → migratsiya oson. Yangi serverda `5027` ishlasa, oqim avtomatik keladi. IP ko'chirish kerak emas.
-- **Agar xom IP (eski server)** → cutover paytida eski IP'ni yangi serverga biriktirish (floating IP) yoki qurilmalarni qayta sozlash kerak.
+### Ko'chirish variantlari
 
-> Buni bitta qurilma sozlamasidan tekshiring.
+| Variant | Tafsilot | Baho |
+|---|---|---|
+| A) IP ko'chirish | `92.246.76.38`ni yangi serverga biriktirish | ❌ Ehtimol imkonsiz (boshqa provayder) |
+| **B) Qurilmalarni domenga o'tkazish** | 6445 qurilmani FOTA WEB / SMS gateway orqali `gps.megago.uz`ga sozlash | ✅ To'g'ri yechim |
+| **C) Parallel ishlatish** | Ikkala server bir muddat ishlaydi, qurilmalar partiyalab ko'chiriladi | ✅ Downtime'siz |
+
+> **Tavsiya: B + C birga.** Yangi serverni tayyorlab `5027`ni ochamiz → qurilmalarni partiyalab `gps.megago.uz` domeniga o'tkazamiz (kelajakda ko'chirish oson) → ikkala server parallel ishlaydi.
+>
+> ⚠️ **OCHIQ SAVOL:** 6445 qurilmani ommaviy qayta sozlash imkoni bormi (Teltonika FOTA WEB / SMS)? Bu hal qilinmasa, migratsiya bo'lmaydi.
 
 ---
 
@@ -107,7 +147,27 @@ scp -P 1170 /tmp/teltonika_db.dump megasoft@195.158.20.195:/tmp/
 # --- YANGI serverda ---
 pg_restore -U teltonika -h localhost -d teltonika_db --no-owner --no-acl /tmp/teltonika_db.dump
 ```
-> PG versiyasi: eski ≤ 16 bo'lsa muammosiz. Eski server versiyasini oldindan tekshiring (`psql --version`).
+> PG versiyasi: eski ≤ 16 bo'lsa muammosiz. ✅ Tasdiqlandi: eski = yangi = **16.14**.
+> Eski DB hajmi: **3.4 GB** (`-Fc` siqilgan dump ~0.5–1 GB chiqadi).
+
+### 5.3.1. ⚠️ File descriptor limit (6445+ ulanish uchun SHART)
+
+Eski serverда ~6445 ta GPS qurilma bir vaqtda ulangan. Linux default `ulimit -n` = 1024 — bu yetmaydi, ~1024-ulanishdan keyin yangilari rad etiladi. Yangi serverda oshiramiz:
+
+```bash
+# system-wide limit
+echo "* soft nofile 65535" | sudo tee -a /etc/security/limits.conf
+echo "* hard nofile 65535" | sudo tee -a /etc/security/limits.conf
+
+# PM2 process uchun (root/systemd ostida ishlasa)
+sudo mkdir -p /etc/systemd/system/pm2-root.service.d
+printf "[Service]\nLimitNOFILE=65535\n" | sudo tee /etc/systemd/system/pm2-root.service.d/limits.conf
+sudo systemctl daemon-reload
+
+# tekshirish (PM2 qayta start qilingach):
+# cat /proc/$(pgrep -f 'teltonika-api' | head -1)/limits | grep 'open files'
+```
+> Maqsad: Node process kamida **65535** ta ochiq fayl deskriptori ko'tara olishi (6445 ulanish + zaxira).
 
 ### 5.4. Kodni joylash
 ```bash
