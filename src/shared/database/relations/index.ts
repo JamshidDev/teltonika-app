@@ -7,6 +7,17 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.users.id,
       to: r.cars.userId,
     }),
+    role: r.one.roles({
+      from: r.users.roleId,
+      to: r.roles.id,
+    }),
+  },
+
+  roles: {
+    users: r.many.users({
+      from: r.roles.id,
+      to: r.users.roleId,
+    }),
   },
 
   drivers: {

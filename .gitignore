@@ -58,3 +58,7 @@ frontend
 
 # Claude Code sessiya fayllari
 .claude/
+
+# Lokal .env nusxalari
+.env.bak
+.env.local

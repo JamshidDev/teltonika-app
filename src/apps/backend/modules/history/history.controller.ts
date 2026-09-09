@@ -7,18 +7,17 @@ import {
 } from './history.dto';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { GetUser } from '@/shared/decarators/get-user.decorator';
+import { RequirePermission } from '@/shared/decarators/require-permission.decorator';
 
 @ApiBearerAuth()
 @ApiTags('History')
 @Controller('api/history')
+@RequirePermission('history:read')
 export class HistoryController {
   constructor(private readonly historyService: HistoryService) {}
 
   @Get('positions')
-  getCarPositions(
-    @Query() dto: CarHistoryDto,
-    @GetUser('id') userId: number,
-  ) {
+  getCarPositions(@Query() dto: CarHistoryDto, @GetUser('id') userId: number) {
     return this.historyService.getCarPositions(dto, userId);
   }
 
@@ -83,7 +82,9 @@ export class HistoryController {
     );
   }
 
-  @ApiOperation({ summary: 'Device traffic stats — car, device, driver, total bytes' })
+  @ApiOperation({
+    summary: 'Device traffic stats — car, device, driver, total bytes',
+  })
   @Get('traffic')
   async getTrafficStats(
     @Query() dto: CarRouteWithEventsDto,

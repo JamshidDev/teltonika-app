@@ -64,6 +64,13 @@
       "when": 1772017322070,
       "tag": "0008_wakeful_amphibian",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788858372370,
+      "tag": "0009_roles_permissions",
+      "breakpoints": true
     }
   ]
 }

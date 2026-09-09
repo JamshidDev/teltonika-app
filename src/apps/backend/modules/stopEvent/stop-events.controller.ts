@@ -3,10 +3,12 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { GetUser } from '@/shared/decarators/get-user.decorator';
 import { StopEventsService } from './stop-events.service';
 import { StopEventsQueryDto } from './stop-events.dto';
+import { RequirePermission } from '@/shared/decarators/require-permission.decorator';
 
 @ApiBearerAuth()
 @ApiTags('Stop Events')
 @Controller('api/stop-events')
+@RequirePermission('stop-events:read')
 export class StopEventsController {
   constructor(private readonly stopEventsService: StopEventsService) {}
 

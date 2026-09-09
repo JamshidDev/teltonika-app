@@ -19,6 +19,10 @@ import { DeviceModule } from '@/apps/backend/modules/device/device.module';
 import { StopEventsModule } from '@/apps/backend/modules/stopEvent/stop-events.module';
 import { EngineEventsModule } from '@/apps/backend/modules/engineEvent/engine-event.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { PermissionModule } from '@/shared/permission/permission.module';
+import { PermissionsGuard } from '@/shared/guards/permissions.guard';
+import { UserModule } from '@/apps/backend/modules/user/user.module';
+import { RoleModule } from '@/apps/backend/modules/role/role.module';
 
 @Module({
   imports: [
@@ -46,7 +50,10 @@ import { ScheduleModule } from '@nestjs/schedule';
         },
       }),
     }),
+    PermissionModule,
     AuthModule,
+    UserModule,
+    RoleModule,
     CarModule,
     GatewayModule,
     HistoryModule,
@@ -58,9 +65,14 @@ import { ScheduleModule } from '@nestjs/schedule';
   controllers: [],
   providers: [
     JwtGuard,
+    // Tartib muhim: avval JWT, keyin permission.
     {
       provide: APP_GUARD,
       useClass: GlobalJwtGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: PermissionsGuard,
     },
   ],
 })

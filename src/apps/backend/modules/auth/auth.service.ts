@@ -1,74 +1,93 @@
 // src/apps/backend/modules/auth/auth.service.ts
-import {
-  ConflictException,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { eq } from 'drizzle-orm';
 import type { DataSource } from '@/shared/database/database.provider';
 import { InjectDb } from '@/shared/database/database.provider';
-import { users } from '@/shared/database/schema';
-import { eq } from 'drizzle-orm';
-import { LoginDto, RegisterDto } from './auth.dto';
+import { roles, users } from '@/shared/database/schema';
+import { PermissionService } from '@/shared/permission/permission.service';
+import { LoginDto } from './auth.dto';
 
 @Injectable()
 export class AuthService {
   constructor(
     @InjectDb() private db: DataSource,
     private readonly jwt: JwtService,
+    private readonly permissionService: PermissionService,
   ) {}
 
-  async register(dto: RegisterDto) {
-    const existing = await this.db
-      .select()
-      .from(users)
-      .where(eq(users.email, dto.email))
-      .limit(1);
-
-    if (existing.length > 0) {
-      throw new ConflictException('Email already exists');
-    }
-
-    const hash = await bcrypt.hash(dto.password, 10);
-
-    const result = await this.db
-      .insert(users)
-      .values({
-        name: dto.name,
-        email: dto.email,
-        password: hash,
-      })
-      .returning({ id: users.id, name: users.name, email: users.email });
-
-    const user = result[0];
-    const token = this.jwt.sign({ id: user.id, email: user.email });
-
-    return { user, token };
-  }
-
   async login(dto: LoginDto) {
-    const result = await this.db
-      .select()
+    const [row] = await this.db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        password: users.password,
+        roleId: roles.id,
+        roleName: roles.name,
+        permissions: roles.permissions,
+      })
       .from(users)
+      .innerJoin(roles, eq(users.roleId, roles.id))
       .where(eq(users.email, dto.email))
       .limit(1);
 
-    const user = result[0];
-    if (!user) {
+    if (!row) {
       throw new UnauthorizedException('Email or password incorrect');
     }
 
-    const valid = await bcrypt.compare(dto.password, user.password);
+    const valid = await bcrypt.compare(dto.password, row.password);
     if (!valid) {
       throw new UnauthorizedException('Email or password incorrect');
     }
 
-    const token = this.jwt.sign({ id: user.id, email: user.email });
+    const token = this.jwt.sign({ id: row.id, email: row.email });
 
     return {
-      user: { id: user.id, name: user.name, email: user.email },
+      user: this.toProfile(row),
       token,
+    };
+  }
+
+  async me(userId: number) {
+    const [row] = await this.db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        roleId: roles.id,
+        roleName: roles.name,
+        permissions: roles.permissions,
+      })
+      .from(users)
+      .innerJoin(roles, eq(users.roleId, roles.id))
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    if (!row) throw new UnauthorizedException('User not found');
+    return this.toProfile(row);
+  }
+
+  private toProfile(row: {
+    id: number;
+    name: string;
+    email: string;
+    roleId: number;
+    roleName: string;
+    permissions: string[] | null;
+  }) {
+    const permissions = row.permissions ?? [];
+    return {
+      id: row.id,
+      name: row.name,
+      email: row.email,
+      role: {
+        id: row.roleId,
+        name: row.roleName,
+        permissions,
+      },
+      isSuperAdmin: permissions.includes('*'),
     };
   }
 }

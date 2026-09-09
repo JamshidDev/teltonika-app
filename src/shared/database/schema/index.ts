@@ -1,3 +1,4 @@
+export * from './roles.schema';
 export * from './users.schema';
 export * from './cars.schema';
 export * from './car-positions.schema';
