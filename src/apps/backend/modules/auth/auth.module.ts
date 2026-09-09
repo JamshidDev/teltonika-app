@@ -1,20 +1,22 @@
 // src/apps/backend/modules/auth/auth.module.ts
 import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, type JwtSignOptions } from '@nestjs/jwt';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
-
-// Fallback secret yo'q — kalit bo'lmasa ilova ko'tarilmaydi.
-const jwtSecret = process.env.JWT_SECRET;
-if (!jwtSecret) {
-  throw new Error('JWT_SECRET environment variable is required');
-}
+import { JwtConfig } from '@/shared/config/jwt.config';
 
 @Module({
   imports: [
-    JwtModule.register({
-      secret: jwtSecret,
-      signOptions: { expiresIn: '7d' },
+    // Kalit configify orqali .env dan o'qiladi — process.env oldindan yuklangan
+    // bo'lishi shart emas. Kalit bo'lmasa configify ilovani ko'tarmaydi.
+    JwtModule.registerAsync({
+      inject: [JwtConfig],
+      useFactory: (config: JwtConfig) => ({
+        secret: config.secret,
+        signOptions: {
+          expiresIn: config.expiresIn as JwtSignOptions['expiresIn'],
+        },
+      }),
     }),
   ],
   providers: [AuthService],
