@@ -52,16 +52,16 @@ export class HistoryService {
   ) {}
 
   /** Mashina shu foydalanuvchiga tegishliligini tekshiradi. */
-  private async assertCarAccess(carId: number, userId: number) {
-    const owned = await this.db
+  // Ko'rish doirasi rolga bog'liq (RBAC) — bu yerda faqat mashina mavjudligi
+  // tekshiriladi, egasi kimligi ahamiyatsiz.
+  private async assertCarAccess(carId: number) {
+    const found = await this.db
       .select({ id: cars.id })
       .from(cars)
-      .where(
-        and(eq(cars.id, carId), eq(cars.userId, userId), isNull(cars.deletedAt)),
-      )
+      .where(and(eq(cars.id, carId), isNull(cars.deletedAt)))
       .limit(1);
 
-    if (!owned[0]) {
+    if (!found[0]) {
       throw new ForbiddenException('Bu mashinaga ruxsat yo\'q');
     }
   }
@@ -71,12 +71,12 @@ export class HistoryService {
     const pageSize = Math.min(Math.max(dto.pageSize ?? 20, 1), 100);
     const offset = (page - 1) * pageSize;
     if (dto.carId) {
-      await this.assertCarAccess(dto.carId, userId);
+      await this.assertCarAccess(dto.carId);
     }
 
     const whereClause = dto.carId
-      ? and(eq(carPositions.carId, dto.carId), eq(cars.userId, userId))
-      : eq(cars.userId, userId);
+      ? eq(carPositions.carId, dto.carId)
+      : undefined;
 
     const [data, countResult] = await Promise.all([
       this.db
@@ -140,7 +140,7 @@ export class HistoryService {
   }
 
   async getCarRoute(dto: CarRouteDto, userId: number) {
-    await this.assertCarAccess(dto.carId, userId);
+    await this.assertCarAccess(dto.carId);
 
     const rawPoints = await this.queryRoutePoints(
       dto.carId,
@@ -164,7 +164,7 @@ export class HistoryService {
     to: string,
     tzOffset?: number,
   ) {
-    await this.assertCarAccess(carId, userId);
+    await this.assertCarAccess(carId);
 
     const result = await this.db.execute(sql`
       SELECT latitude    as lat,
@@ -234,7 +234,7 @@ export class HistoryService {
     from: string,
     to: string,
   ) {
-    await this.assertCarAccess(carId, userId);
+    await this.assertCarAccess(carId);
 
     const fromDate = new Date(from);
     const toDate = new Date(to);
@@ -1081,7 +1081,7 @@ export class HistoryService {
     from: string,
     to: string,
   ) {
-    await this.assertCarAccess(carId, userId);
+    await this.assertCarAccess(carId);
 
     // 1. Barcha position'larni olish (filtr yo'q — barcha data)
     const rows = await this.db

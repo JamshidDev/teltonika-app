@@ -15,7 +15,7 @@ export class StopEventsService {
     const offset = (page - 1) * pageSize;
 
     // Faqat shu foydalanuvchining mashinalari.
-    const conditions: SQL[] = [eq(cars.userId, userId)];
+    const conditions: SQL[] = [];
 
     if (dto.carId) {
       conditions.push(eq(carStopEvents.carId, dto.carId));

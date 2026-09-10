@@ -59,14 +59,14 @@ export class CarService {
           and(eq(carDrivers.carId, cars.id), isNull(carDrivers.endAt)),
         )
         .leftJoin(drivers, eq(drivers.id, carDrivers.driverId))
-        .where(and(eq(cars.userId, userId), isNull(cars.deletedAt)))
+        .where(isNull(cars.deletedAt))
         .offset(offset)
         .limit(pageSize),
 
       this.db
         .select({ total: count() })
         .from(cars)
-        .where(and(eq(cars.userId, userId), isNull(cars.deletedAt))),
+        .where(isNull(cars.deletedAt)),
     ]);
 
     const total = Number(countResult[0]?.total ?? 0);
@@ -137,7 +137,7 @@ export class CarService {
       .select()
       .from(cars)
       .where(
-        and(eq(cars.id, id), eq(cars.userId, userId), isNull(cars.deletedAt)),
+        and(eq(cars.id, id), isNull(cars.deletedAt)),
       )
       .limit(1);
 
@@ -203,7 +203,7 @@ export class CarService {
       .select()
       .from(cars)
       .where(
-        and(eq(cars.id, id), eq(cars.userId, userId), isNull(cars.deletedAt)),
+        and(eq(cars.id, id), isNull(cars.deletedAt)),
       )
       .limit(1);
 
@@ -235,7 +235,7 @@ export class CarService {
       .select()
       .from(cars)
       .where(
-        and(eq(cars.id, id), eq(cars.userId, userId), isNull(cars.deletedAt)),
+        and(eq(cars.id, id), isNull(cars.deletedAt)),
       )
       .limit(1);
 
@@ -267,7 +267,7 @@ export class CarService {
         })
         .from(cars)
         .innerJoin(carLastPositions, eq(cars.id, carLastPositions.carId))
-        .where(and(eq(cars.userId, userId), isNull(cars.deletedAt)))
+        .where(isNull(cars.deletedAt))
         .orderBy(
           sql`${carLastPositions.updatedAt}
           DESC NULLS LAST`,
@@ -279,7 +279,7 @@ export class CarService {
         .select({ total: count() })
         .from(cars)
         .innerJoin(carLastPositions, eq(cars.id, carLastPositions.carId))
-        .where(and(eq(cars.userId, userId), isNull(cars.deletedAt))),
+        .where(isNull(cars.deletedAt)),
     ]);
 
     const total = Number(countResult[0]?.total ?? 0);
