@@ -82,22 +82,6 @@ export class HistoryController {
     );
   }
 
-  @ApiOperation({
-    summary: 'Device traffic stats — car, device, driver, total bytes',
-  })
-  @Get('traffic')
-  async getTrafficStats(
-    @Query() dto: CarRouteWithEventsDto,
-    @GetUser('id') userId: number,
-  ) {
-    return this.historyService.getTrafficStats(
-      dto.carId,
-      userId,
-      dto.from,
-      dto.to,
-    );
-  }
-
   @Get('route/geojson')
   async getCarRouteGeoJson(
     @Query() dto: CarRouteDto,

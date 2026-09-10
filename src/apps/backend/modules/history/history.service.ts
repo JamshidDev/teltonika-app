@@ -4,8 +4,6 @@ import { InjectDb } from '@/shared/database/database.provider';
 import {
   carPositions,
   cars,
-  carDevices,
-  carDrivers,
   devices,
   drivers,
 } from '@/shared/database/schema';
@@ -1353,123 +1351,6 @@ export class HistoryService {
         .reduce((s, t) => s + t.points.length, 0),
       timeline,
     };
-  }
-
-  // ─── Traffic stats ───
-
-  async getTrafficStats(
-    carId: number,
-    userId: number,
-    from: string,
-    to: string,
-  ) {
-    await this.assertCarAccess(carId, userId);
-
-    const fromDate = new Date(from);
-    const toDate = new Date(to);
-
-    // carId dan aktiv deviceId ni topish
-    const deviceRow = await this.db
-      .select({
-        deviceId: carDevices.deviceId,
-        imei: devices.imei,
-        model: devices.model,
-      })
-      .from(carDevices)
-      .innerJoin(devices, eq(carDevices.deviceId, devices.id))
-      .where(
-        and(
-          eq(carDevices.carId, carId),
-          isNull(carDevices.endAt),
-        ),
-      )
-      .limit(1);
-
-    const device = deviceRow[0] ?? null;
-
-    // car_positions dan trafik hisoblash
-    const rows = await this.db
-      .select({
-        bytesReceived: carPositions.bytesReceived,
-        recordedAt: carPositions.recordedAt,
-      })
-      .from(carPositions)
-      .where(
-        and(
-          eq(carPositions.carId, carId),
-          between(carPositions.recordedAt, fromDate, toDate),
-        ),
-      )
-      .orderBy(carPositions.recordedAt);
-
-    let totalBytes = 0;
-    let totalRows = 0;
-    const hourly: Record<string, { bytes: number; rows: number }> = {};
-
-    for (const row of rows) {
-      const bytes = row.bytesReceived ?? 0;
-      totalBytes += bytes;
-      totalRows++;
-
-      const hour = new Date(row.recordedAt).toISOString().slice(0, 13) + ':00';
-      if (!hourly[hour]) hourly[hour] = { bytes: 0, rows: 0 };
-      hourly[hour].bytes += bytes;
-      hourly[hour].rows++;
-    }
-
-    const hourlyStats = Object.entries(hourly)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([hour, stats]) => ({
-        hour,
-        bytes: stats.bytes,
-        rows: stats.rows,
-        bytesFormatted: this.formatBytes(stats.bytes),
-      }));
-
-    // Car ma'lumoti
-    const carRow = await this.db
-      .select({ name: cars.name, carNumber: cars.carNumber })
-      .from(cars)
-      .where(eq(cars.id, carId))
-      .limit(1);
-    const car = carRow[0] ?? null;
-
-    // Aktiv haydovchi
-    const driverRow = await this.db
-      .select({
-        driverId: carDrivers.driverId,
-        fullName: drivers.fullName,
-        phone: drivers.phone,
-      })
-      .from(carDrivers)
-      .innerJoin(drivers, eq(carDrivers.driverId, drivers.id))
-      .where(
-        and(
-          eq(carDrivers.carId, carId),
-          isNull(carDrivers.endAt),
-        ),
-      )
-      .limit(1);
-    const driver = driverRow[0] ?? null;
-
-    return {
-      car: car ? { id: carId, name: car.name, carNumber: car.carNumber } : null,
-      device: device
-        ? { id: device.deviceId, imei: device.imei, model: device.model }
-        : null,
-      driver: driver
-        ? { id: driver.driverId, fullName: driver.fullName, phone: driver.phone }
-        : null,
-      totalBytes,
-      totalFormatted: this.formatBytes(totalBytes),
-    };
-  }
-
-  private formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
   }
 
   private calculateSegmentDistanceKm(points: RoutePoint[]): number {
