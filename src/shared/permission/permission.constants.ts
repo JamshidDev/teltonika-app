@@ -9,7 +9,10 @@ export interface PermissionGroup {
 // Permission kalitlarining yagona manbai — frontend ham shu ro'yxatni API orqali oladi.
 export const PERMISSION_CATALOG: PermissionGroup[] = [
   { resource: 'map', label: 'Xarita', actions: ['read'] },
-  { resource: 'history', label: 'Tarix', actions: ['read'] },
+  // Xarita "Yo'l" tabi shu ruxsat bilan ishlaydi (yo'nalish/timeline ma'lumoti).
+  { resource: 'history', label: 'Yo\'l tarixi (ma\'lumot)', actions: ['read'] },
+  // Alohida "Tarix" sahifasi — ma'lumot ruxsatidan mustaqil.
+  { resource: 'history-page', label: 'Tarix sahifasi', actions: ['read'] },
   { resource: 'reports', label: 'Hisobotlar', actions: ['read'] },
   {
     resource: 'engine-events',
